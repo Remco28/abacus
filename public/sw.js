@@ -1,11 +1,11 @@
-const CACHE = 'soroban-v1';
+const CACHE = 'soroban-v2';
 self.addEventListener('install', event => {
   event.waitUntil((async () => {
     const cache = await caches.open(CACHE);
     const response = await fetch('/', { cache: 'reload' });
     const html = await response.clone().text();
     const assets = [...html.matchAll(/(?:src|href)="(\/assets\/[^\"]+)"/g)].map(match => match[1]);
-    await cache.addAll([...new Set([...assets, '/icon.svg', '/manifest.webmanifest'])]);
+    await cache.addAll([...new Set([...assets, '/icon.svg', '/icon-192.png', '/icon-512.png', '/manifest.webmanifest'])]);
     await cache.put('/', response);
     await self.skipWaiting();
   })());
