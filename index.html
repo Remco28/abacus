@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#183e36" />
+  <meta name="description" content="A tactile soroban for curious minds. Move, count, and explore at your own pace." />
+  <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <title>Soroban · A little room to count</title>
+</head>
+<body>
+  <main>
+    <header><a class="brand" href="/" aria-label="Soroban home"><span class="brand-icon">╪</span> soroban<span class="brand-dot">.</span></a><span class="header-note">A LITTLE ROOM TO COUNT</span><button id="help" class="quiet">How it works <span>?</span></button></header>
+    <section class="intro"><div><p class="eyebrow">YOUR EVERYDAY ABACUS</p><h1>Make room for numbers.</h1><p class="subtitle">A bead at a time. At your own pace.</p></div><span class="free-play"><i></i> Free play</span></section>
+    <section class="workspace" aria-label="Interactive soroban">
+      <div class="readout"><div><span class="eyebrow">ON YOUR BOARD</span><output id="value" aria-label="Current board value">0</output></div><div class="target"><label for="target">A number to explore <span>optional</span></label><input id="target" inputmode="decimal" autocomplete="off" placeholder="e.g. 125.5" maxlength="18" aria-describedby="target-note"/><small id="target-note">Keep a number in view as you move.</small></div></div>
+      <div class="board-wrap"><div id="labels" class="labels"></div><svg id="board" viewBox="0 0 600 390" role="group" aria-label="Soroban: move beads toward the middle bar to count them"></svg><div id="digits" class="digits" aria-label="Value of each column"></div></div>
+      <div class="board-footer"><span><i class="lit-dot"></i> Lit beads count toward the middle bar</span><label class="decimal-control">Ones column <select id="decimal" aria-label="Choose the ones column"></select></label></div>
+    </section>
+    <section class="toolbar" aria-label="Board controls"><div class="tool-group"><button id="reset" class="primary">↺ <span>Clear board</span></button><button id="undo" class="secondary" disabled>↶ <span>Undo</span></button></div><div class="tool-group"><button id="sound" class="secondary" aria-pressed="true">♪ <span>Sound on</span></button><button id="motion" class="secondary" aria-pressed="false">⌁ <span>Enable shake</span></button></div></section>
+    <p id="status" role="status" aria-live="polite">Slide or tap a bead to begin. More than one finger is welcome.</p>
+    <footer><span>One above. Four below. Endless possibilities.</span><span>MADE FOR EXPLORING</span></footer>
+  </main>
+  <dialog id="help-dialog"><button id="close-help" class="quiet close" aria-label="Close help">✕</button><p class="eyebrow">A QUICK START</p><h2>Meet your soroban.</h2><p>Each rod holds one digit. Move beads toward the middle bar to count them: the upper bead is worth <strong>5</strong>, and each lower bead is worth <strong>1</strong>. Counted beads glow green.</p><p>Slide a bead to push its neighbors, or tap to bring it to the bar. Use several fingers to move different beads together.</p><p>The small dots on the bar mark every third rod. Tap a place label, or use <strong>Ones column</strong>, to change decimal placement. The number on the board changes; the beads stay put.</p><p>Enable shake, allow motion access if asked, then shake three times within two seconds to clear. Undo brings the board back. Sound starts after your first interaction.</p><p>Keyboard: Tab to a bead and press Enter or Space to move it. Your board and preferences are saved on this device.</p><p class="install-note">To keep it close: use your browser’s Install app or Add to Home Screen option. After the first online visit, it works offline.</p></dialog>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
