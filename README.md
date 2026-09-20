@@ -40,7 +40,7 @@ At the DNS provider, create:
 | --- | --- | --- |
 | CNAME | abacus | Remco28.github.io |
 
-After DNS validates and GitHub issues a certificate, enable **Enforce HTTPS**. HTTPS is required for motion and service workers. A static host delivers the files; no application server is needed.
+After a successful deployment, the **Enable HTTPS** workflow waits for GitHub's certificate and turns on **Enforce HTTPS** automatically. It waits up to an hour and can also be run manually. HTTPS is required for motion and service workers. A static host delivers the files; no application server is needed.
 
 ## Verification
 

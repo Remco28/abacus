@@ -1,0 +1,37 @@
+name: Enable HTTPS
+on:
+  workflow_run:
+    workflows: [Deploy Soroban]
+    types: [completed]
+  workflow_dispatch:
+permissions:
+  pages: write
+concurrency:
+  group: pages-https
+  cancel-in-progress: false
+jobs:
+  enable:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    steps:
+      - name: Wait for GitHub certificate and enforce HTTPS
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          for attempt in $(seq 1 120); do
+            if result=$(gh api "repos/$REPOSITORY/pages" -X PUT -F https_enforced=true 2>&1); then
+              echo "HTTPS is enforced."
+              exit 0
+            fi
+            if [[ "$result" != *"certificate does not exist yet"* ]]; then
+              echo "$result"
+              exit 1
+            fi
+            echo "Waiting for GitHub to provision the certificate ($attempt/120)."
+            sleep 30
+          done
+          echo "Certificate is still pending. Rerun this workflow when GitHub finishes provisioning."
+          exit 1
