@@ -91,12 +91,9 @@ for (let col = 0; col < COLUMNS; col++) {
 function labels() {
   $('labels').innerHTML = '';
   for (let i = 0; i < COLUMNS; i++) {
-    const button = document.createElement('button');
+    const button = document.createElement('span');
     button.className = i === ones ? 'selected' : '';
     button.innerHTML = `${placeName(ones - i)}<small>${10 ** (ones - i) >= 1 ? (10 ** (ones - i)).toLocaleString('en-US') : (10 ** (ones - i)).toFixed(i - ones)}</small>`;
-    button.setAttribute('aria-label', `${placeName(ones - i)}. Set this rod as ones`);
-    button.setAttribute('aria-pressed', String(i === ones));
-    button.onclick = () => setOnes(i);
     $('labels').appendChild(button);
   }
   ($('decimal') as HTMLInputElement).value = String(ones);
@@ -104,6 +101,77 @@ function labels() {
 }
 function setOnes(i: number) { if (i === ones) return; cancelPointers(); ones = i; labels(); render(); save(); status(`Column ${i + 1} is now ones.`); }
 $('decimal').oninput = () => setOnes(Number(($('decimal') as HTMLInputElement).value));
+// Keep the native range for keyboard/assistive input, but own pointer gestures
+// so a tap on its track or a brush over its thumb can never change the value.
+const decimal = $('decimal') as HTMLInputElement;
+const decimalTrack = decimal.parentElement!;
+// A separate hit surface prevents native range track taps from bypassing the
+// hold on touch browsers. The range remains focusable for keyboard/AT input.
+const decimalGesture = document.createElement('div');
+decimalGesture.className = 'decimal-gesture';
+decimalGesture.setAttribute('aria-hidden', 'true');
+decimalTrack.appendChild(decimalGesture);
+decimal.setAttribute('aria-label', 'Ones column. Hold the gold caret, then drag to change decimal place. Or use arrow keys.');
+let decimalHold: { id: number; x: number; y: number; ready: boolean; timer: ReturnType<typeof setTimeout> } | undefined;
+let hintTimer: ReturnType<typeof setTimeout> | undefined;
+let hintSeen = false;
+try { hintSeen = localStorage.getItem('soroban-decimal-hint') === '1'; } catch { /* Optional hint memory. */ }
+function decimalHint(message: string) {
+  clearTimeout(hintTimer);
+  decimalTrack.dataset.hint = message;
+  decimalTrack.style.setProperty('--caret-left', `${11.111 + ones * 77.778 / (COLUMNS - 1)}%`);
+  hintTimer = setTimeout(() => { delete decimalTrack.dataset.hint; }, 2200);
+}
+function lockDecimal() {
+  const hold = decimalHold;
+  decimalHold = undefined;
+  if (hold) {
+    clearTimeout(hold.timer);
+    if (decimalGesture.hasPointerCapture(hold.id)) decimalGesture.releasePointerCapture(hold.id);
+  }
+  decimal.classList.remove('holding', 'unlocked');
+  if (hold?.ready) { clearTimeout(hintTimer); delete decimalTrack.dataset.hint; status('Decimal position locked.'); }
+}
+decimalGesture.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  if (e.button !== 0 || decimalHold) return;
+  const r = decimal.getBoundingClientRect();
+  const center = r.left + 16 + ones / (COLUMNS - 1) * (r.width - 32);
+  if (Math.abs(e.clientX - center) > 22) return;
+  decimal.focus({ preventScroll: true });
+  if (!hintSeen) decimalHint('Hold to move');
+  decimal.classList.add('holding');
+  decimalGesture.setPointerCapture(e.pointerId);
+  decimalHold = { id: e.pointerId, x: e.clientX, y: e.clientY, ready: false, timer: setTimeout(() => {
+    if (!decimalHold) return;
+    decimalHold.ready = true;
+    decimal.classList.remove('holding'); decimal.classList.add('unlocked');
+    decimalHint('Drag to move'); status('Decimal unlocked. Drag left or right, then release to lock.');
+    hintSeen = true;
+    try { localStorage.setItem('soroban-decimal-hint', '1'); } catch { /* Optional hint memory. */ }
+  }, 500) };
+});
+decimalGesture.addEventListener('pointermove', e => {
+  e.preventDefault();
+  const hold = decimalHold;
+  if (!hold || hold.id !== e.pointerId) return;
+  if (!hold.ready) {
+    if (Math.hypot(e.clientX - hold.x, e.clientY - hold.y) > 8) lockDecimal();
+    return;
+  }
+  const r = decimal.getBoundingClientRect();
+  setOnes(Math.max(0, Math.min(COLUMNS - 1, Math.round((e.clientX - r.left - 16) / (r.width - 32) * (COLUMNS - 1)))));
+  decimalTrack.style.setProperty('--caret-left', `${11.111 + ones * 77.778 / (COLUMNS - 1)}%`);
+});
+for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) decimalGesture.addEventListener(type, e => {
+  if ((e as PointerEvent).pointerId === decimalHold?.id) lockDecimal();
+});
+decimalGesture.addEventListener('click', e => e.preventDefault());
+decimalGesture.addEventListener('contextmenu', e => e.preventDefault());
+decimal.addEventListener('keydown', lockDecimal);
+window.addEventListener('blur', lockDecimal);
+window.addEventListener('resize', lockDecimal);
+document.addEventListener('visibilitychange', () => { if (document.hidden) lockDecimal(); });
 let lastDigits = '';
 function render() {
   const values = board.map(digit);
@@ -192,7 +260,7 @@ function endPointer(e: PointerEvent) {
 svg.addEventListener('pointerup', endPointer);
 svg.addEventListener('pointercancel', endPointer);
 svg.addEventListener('lostpointercapture', endPointer);
-function reset(shaken = false) { cancelPointers(); board = createBoard(); render(); save(); clickSound(); status(shaken ? 'Three shakes. Board cleared.' : 'Board cleared.'); }
+function reset(shaken = false) { lockDecimal(); cancelPointers(); board = createBoard(); render(); save(); clickSound(); status(shaken ? 'Three shakes. Board cleared.' : 'Board cleared.'); }
 $('reset').onclick = () => reset();
 let previous = performance.now(), accumulator = 0, lastSave = previous;
 function frame(now: number) {
@@ -254,7 +322,7 @@ $('motion').onclick = async () => {
 };
 const settings = $('settings-dialog') as HTMLDialogElement;
 const welcome = $('welcome-dialog') as HTMLDialogElement;
-$('settings').onclick = () => { cancelPointers(); settings.showModal(); };
+$('settings').onclick = () => { lockDecimal(); cancelPointers(); settings.showModal(); };
 $('close-settings').onclick = () => settings.close();
 $('show-welcome').onclick = () => { settings.close(); welcome.showModal(); };
 $('start').onclick = () => welcome.close();
