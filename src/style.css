@@ -21,10 +21,10 @@ dialog{width:min(440px,calc(100% - 32px));max-height:calc(100dvh - 32px);border:
 .labels > span { display: flex; flex-direction: column; justify-content: center; color: #738067; font-size: clamp(8px, 1.6vw, 13px); padding: 2px; overflow-wrap: anywhere; }
 .labels > span.selected { color: var(--green); font-weight: 750; }
 #decimal { pointer-events: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
-.decimal-gesture { position: absolute; inset: 0; pointer-events: auto; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; cursor: grab; }
-#decimal.unlocked { cursor: grabbing; }
-#decimal.holding::-webkit-slider-thumb { background: #ffe2a3; }
-#decimal.holding::-moz-range-thumb { background: #ffe2a3; }
+.decimal-gesture { position: absolute; inset: 0; pointer-events: auto; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; cursor: default; }
+#decimal.unlocked + .decimal-gesture { cursor: ew-resize; }
+.lock-control { font-size: 18px; }
+.lock-control[aria-pressed=true] { background: #e8eddf; }
 #decimal.unlocked::-webkit-slider-thumb { background: #fff1c3; transform: scale(1.35); }
 #decimal.unlocked::-moz-range-thumb { background: #fff1c3; transform: scale(1.35); }
 .decimal-slider[data-hint]::after { content: attr(data-hint); position: absolute; left: clamp(64px, var(--caret-left), calc(100% - 64px)); top: -30px; transform: translateX(-50%); padding: 4px 9px; border-radius: 6px; background: #183e36; color: #fff4d5; font-size: 12px; white-space: nowrap; pointer-events: none; }

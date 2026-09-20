@@ -31,25 +31,15 @@ try {
   await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
   await pause(200);
   assert.equal(await evaluate('document.querySelector("#value").textContent'), '54.00', 'simultaneous touch drags and neighbor pushing');
-  // Track taps, label taps, and moving before the hold completes stay locked.
+  // Track taps and label taps stay inert while the decimal control is locked.
   await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [point(1, 134, 3)] });
-  await pause(550);
   await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
-  assert.equal(await evaluate('document.querySelector("#decimal").value'), '3', 'holding the track does not unlock');
+  assert.equal(await evaluate('document.querySelector("#decimal").value'), '3', 'locked track ignores taps');
   await evaluate('document.querySelector("#labels").firstElementChild.click()');
   assert.equal(await evaluate('document.querySelector("#decimal").value'), '3', 'place labels are read-only');
+  await evaluate('document.querySelector("#decimal-lock").click()');
+  assert.equal(await evaluate('document.querySelector("#decimal").classList.contains("unlocked")'), true, 'lock button unlocks slider');
   await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [point(3, 134, 3)] });
-  await send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [point(4, 134, 3)] });
-  await pause(550);
-  await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
-  assert.equal(await evaluate('document.querySelector("#decimal").value'), '3', 'early movement cancels hold');
-  await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [point(3, 134, 3)] });
-  await pause(550);
-  assert.equal(await evaluate('document.querySelector("#decimal").classList.contains("unlocked")'), true, 'hold gives visible unlock feedback');
-  await send('Input.dispatchTouchEvent', { type: 'touchCancel', touchPoints: [] });
-  assert.equal(await evaluate('document.querySelector("#decimal").classList.contains("unlocked")'), false, 'cancel relocks');
-  await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [point(3, 134, 3)] });
-  await pause(550);
   await send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [point(4, 134, 3)] });
   await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
   assert.equal(await evaluate('document.querySelector("#value").textContent'), '540.0', 'decimal relocation');
@@ -57,13 +47,14 @@ try {
   await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [point(4, 134, 3)] });
   await send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [point(2, 134, 3)] });
   await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
-  assert.equal(await evaluate('document.querySelector("#decimal").value'), '4', 'next gesture requires another hold');
+  assert.equal(await evaluate('document.querySelector("#decimal").value'), '4', 'locked slider ignores next drag');
   const mouseStart = point(4, 134, 3), mouseEnd = point(3, 134, 3);
+  await evaluate('document.querySelector("#decimal-lock").click()');
   await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: mouseStart.x, y: mouseStart.y, button: 'left', clickCount: 1 });
-  await pause(550);
   await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: mouseEnd.x, y: mouseEnd.y, button: 'left', buttons: 1 });
   await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: mouseEnd.x, y: mouseEnd.y, button: 'left', clickCount: 1 });
   assert.equal(await evaluate('document.querySelector("#decimal").value'), '3', 'mouse hold and drag works');
+  await evaluate('document.querySelector("#decimal-lock").click(); document.querySelector("#decimal").focus()');
   await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'ArrowRight', code: 'ArrowRight', windowsVirtualKeyCode: 39 });
   await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'ArrowRight', code: 'ArrowRight', windowsVirtualKeyCode: 39 });
   assert.equal(await evaluate('document.querySelector("#decimal").value'), '4', 'keyboard remains accessible');

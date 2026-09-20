@@ -112,63 +112,36 @@ decimalGesture.className = 'decimal-gesture';
 decimalGesture.setAttribute('aria-hidden', 'true');
 decimalTrack.appendChild(decimalGesture);
 decimal.setAttribute('aria-label', 'Ones column. Hold the gold caret, then drag to change decimal place. Or use arrow keys.');
-let decimalHold: { id: number; x: number; y: number; ready: boolean; timer: ReturnType<typeof setTimeout> } | undefined;
 let hintTimer: ReturnType<typeof setTimeout> | undefined;
-let hintSeen = false;
-try { hintSeen = localStorage.getItem('soroban-decimal-hint') === '1'; } catch { /* Optional hint memory. */ }
+let decimalUnlocked = false;
 function decimalHint(message: string) {
   clearTimeout(hintTimer);
   decimalTrack.dataset.hint = message;
   decimalTrack.style.setProperty('--caret-left', `${11.111 + ones * 77.778 / (COLUMNS - 1)}%`);
   hintTimer = setTimeout(() => { delete decimalTrack.dataset.hint; }, 2200);
 }
-function lockDecimal() {
-  const hold = decimalHold;
-  decimalHold = undefined;
-  if (hold) {
-    clearTimeout(hold.timer);
-    if (decimalGesture.hasPointerCapture(hold.id)) decimalGesture.releasePointerCapture(hold.id);
-  }
-  decimal.classList.remove('holding', 'unlocked');
-  if (hold?.ready) { clearTimeout(hintTimer); delete decimalTrack.dataset.hint; status('Decimal position locked.'); }
-}
+function lockDecimal() { decimalUnlocked = false; decimal.classList.remove('unlocked'); $('decimal-lock').textContent = '🔒'; $('decimal-lock').setAttribute('aria-label', 'Unlock decimal slider'); $('decimal-lock').setAttribute('aria-pressed', 'false'); clearTimeout(hintTimer); delete decimalTrack.dataset.hint; }
+function toggleDecimalLock() { decimalUnlocked = !decimalUnlocked; decimal.classList.toggle('unlocked', decimalUnlocked); $('decimal-lock').textContent = decimalUnlocked ? '🔓' : '🔒'; $('decimal-lock').setAttribute('aria-label', decimalUnlocked ? 'Lock decimal slider' : 'Unlock decimal slider'); $('decimal-lock').setAttribute('aria-pressed', String(decimalUnlocked)); if (decimalUnlocked) { decimalHint('Drag the caret'); status('Decimal unlocked. Drag, then tap the lock to secure it.'); } else { status('Decimal position locked.'); } }
+($('decimal-lock') as HTMLButtonElement).onclick = toggleDecimalLock;
 decimalGesture.addEventListener('pointerdown', e => {
   e.preventDefault();
-  if (e.button !== 0 || decimalHold) return;
-  const r = decimal.getBoundingClientRect();
-  const center = r.left + 16 + ones / (COLUMNS - 1) * (r.width - 32);
-  if (Math.abs(e.clientX - center) > 22) return;
+  if (!decimalUnlocked || e.button !== 0) return;
   decimal.focus({ preventScroll: true });
-  if (!hintSeen) decimalHint('Hold to move');
-  decimal.classList.add('holding');
   decimalGesture.setPointerCapture(e.pointerId);
-  decimalHold = { id: e.pointerId, x: e.clientX, y: e.clientY, ready: false, timer: setTimeout(() => {
-    if (!decimalHold) return;
-    decimalHold.ready = true;
-    decimal.classList.remove('holding'); decimal.classList.add('unlocked');
-    decimalHint('Drag to move'); status('Decimal unlocked. Drag left or right, then release to lock.');
-    hintSeen = true;
-    try { localStorage.setItem('soroban-decimal-hint', '1'); } catch { /* Optional hint memory. */ }
-  }, 500) };
 });
 decimalGesture.addEventListener('pointermove', e => {
   e.preventDefault();
-  const hold = decimalHold;
-  if (!hold || hold.id !== e.pointerId) return;
-  if (!hold.ready) {
-    if (Math.hypot(e.clientX - hold.x, e.clientY - hold.y) > 8) lockDecimal();
-    return;
-  }
+  if (!decimalUnlocked) return;
   const r = decimal.getBoundingClientRect();
   setOnes(Math.max(0, Math.min(COLUMNS - 1, Math.round((e.clientX - r.left - 16) / (r.width - 32) * (COLUMNS - 1)))));
   decimalTrack.style.setProperty('--caret-left', `${11.111 + ones * 77.778 / (COLUMNS - 1)}%`);
 });
-for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) decimalGesture.addEventListener(type, e => {
-  if ((e as PointerEvent).pointerId === decimalHold?.id) lockDecimal();
+for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) decimalGesture.addEventListener(type, () => {
+  if (decimalUnlocked) lockDecimal();
 });
 decimalGesture.addEventListener('click', e => e.preventDefault());
 decimalGesture.addEventListener('contextmenu', e => e.preventDefault());
-decimal.addEventListener('keydown', lockDecimal);
+decimal.addEventListener('keydown', e => { if (e.key.startsWith('Arrow') && !decimalUnlocked) e.preventDefault(); });
 window.addEventListener('blur', lockDecimal);
 window.addEventListener('resize', lockDecimal);
 document.addEventListener('visibilitychange', () => { if (document.hidden) lockDecimal(); });
