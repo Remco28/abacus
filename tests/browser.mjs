@@ -20,8 +20,9 @@ try {
   await send('Runtime.enable');
   if (process.argv[3]) { await send('Page.navigate', { url: process.argv[3] }); await pause(1000); }
   await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+  await evaluate('if(document.querySelector("#welcome-dialog").open) document.querySelector("#start").click()');
   await evaluate('document.querySelector("#reset").click()');
-  await evaluate('document.querySelector("#decimal").value="3"; document.querySelector("#decimal").dispatchEvent(new Event("change"))');
+  await evaluate('document.querySelector("#decimal").value="3"; document.querySelector("#decimal").dispatchEvent(new Event("input"))');
   const rect = await evaluate('(()=>{const r=document.querySelector("#board").getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}})()');
   const point = (col, y, id) => ({ x: rect.x + (20 + (col + .5) * 560 / 6) / 600 * rect.width, y: rect.y + y / 390 * rect.height, id, radiusX: 5, radiusY: 5, force: 1 });
   await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [point(3, 354, 1), point(2, 28, 2)] });
@@ -30,24 +31,38 @@ try {
   await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
   await pause(200);
   assert.equal(await evaluate('document.querySelector("#value").textContent'), '54.00', 'simultaneous touch drags and neighbor pushing');
-  await evaluate('document.querySelector("#reset").click();document.querySelector("#undo").click()');
-  assert.equal(await evaluate('document.querySelector("#value").textContent'), '54.00', 'undo reset');
-  await evaluate('document.querySelector("#decimal").value="4";document.querySelector("#decimal").dispatchEvent(new Event("change"))');
+  await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [point(3, 134, 3)] });
+  await send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [point(4, 134, 3)] });
+  await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
   assert.equal(await evaluate('document.querySelector("#value").textContent'), '540.0', 'decimal relocation');
   await send('Page.reload'); await pause(700);
   assert.equal(await evaluate('document.querySelector("#value").textContent'), '540.0', 'persistence');
-  await evaluate('document.querySelector("#motion").click()');
+  assert.equal(await evaluate('document.querySelector("#welcome-dialog").open'), false, 'welcome stays dismissed');
+  await send('Browser.grantPermissions', { origin: await evaluate('location.origin'), permissions: ['sensors'] });
+  await evaluate('document.querySelector("#settings").click(); document.querySelector("#motion").click()');
+  await pause(100);
   for (let i = 0; i < 3; i++) {
     await evaluate('window.dispatchEvent(new DeviceMotionEvent("devicemotion",{acceleration:{x:0,y:0,z:0}}))');
     await pause(220);
     await evaluate('window.dispatchEvent(new DeviceMotionEvent("devicemotion",{acceleration:{x:22,y:0,z:0}}))');
   }
   assert.equal(await evaluate('document.querySelector("#value").textContent'), '0.0', 'three shakes clear board');
-  await evaluate('document.querySelector("#undo").click()');
-  assert.equal(await evaluate('document.querySelector("#value").textContent'), '540.0', 'undo shake');
+  assert.equal(await evaluate('document.querySelector("#motion").getAttribute("aria-pressed")'), 'true', 'motion on only after readings');
+  await evaluate('document.querySelector("#motion").click(); window.originalQuery = navigator.permissions.query.bind(navigator.permissions); navigator.permissions.query = async () => ({state:"denied"}); document.querySelector("#motion").click()');
+  await pause(100);
+  assert.match(await evaluate('document.querySelector("#motion-status").textContent'), /Brave.*Motion sensors/, 'blocked sensor guidance');
+  assert.equal(await evaluate('document.querySelector("#motion").getAttribute("aria-pressed")'), 'false');
+  await evaluate('navigator.permissions.query = window.originalQuery; window.blockMotion = e => e.stopImmediatePropagation(); window.addEventListener("devicemotion", window.blockMotion, true); document.querySelector("#motion").click()');
+  await pause(6300);
+  assert.match(await evaluate('document.querySelector("#motion-status").textContent'), /blocked or unavailable/, 'no-data timeout');
+  await evaluate('window.removeEventListener("devicemotion", window.blockMotion, true); document.querySelector("#close-settings").click(); document.querySelector("#decimal").focus()');
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'ArrowRight', code: 'ArrowRight', windowsVirtualKeyCode: 39 });
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'ArrowRight', code: 'ArrowRight', windowsVirtualKeyCode: 39 });
+  assert.equal(await evaluate('document.querySelector("#decimal").value'), '5', 'keyboard decimal slider');
   await send('Emulation.setDeviceMetricsOverride', { width: 844, height: 390, deviceScaleFactor: 1, mobile: true });
   assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true, 'landscape has no horizontal overflow');
-  assert.equal(await evaluate('document.querySelector(".toolbar").getBoundingClientRect().bottom <= innerHeight'), true, 'landscape controls visible');
+  assert.equal(await evaluate('document.documentElement.scrollHeight <= innerHeight'), true, 'landscape fits screen');
+  assert.equal(await evaluate('document.querySelector("#board").getBoundingClientRect().height > innerHeight * .7'), true, 'landscape mostly board');
   assert.deepEqual(errors, [], 'no browser exceptions');
-  console.log('PASS: simultaneous touch, bead pushing, values, decimal placement, reset/undo, persistence, three-shake reset, landscape layout, no runtime errors.');
+  console.log('PASS: multi-touch, draggable/keyboard decimal slider, persistence, first-visit welcome, shake, denied/no-data motion guidance, compact landscape, no runtime errors.');
 } finally { ws.close(); }

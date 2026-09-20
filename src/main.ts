@@ -1,5 +1,5 @@
 import './style.css';
-import { COLUMNS, SIZE, UPPER, LOWER, createBoard, digit, formatValue, placeName, moveBead, step, ShakeDetector, type Column } from './model';
+import { COLUMNS, SIZE, UPPER, LOWER, createBoard, digit, formatValue, placeName, moveBead, step, ShakeDetector } from './model';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const svg = document.getElementById('board') as unknown as SVGSVGElement;
@@ -7,6 +7,7 @@ svg.setAttribute('preserveAspectRatio', 'none');
 let board = createBoard();
 let ones = 3, sound = true;
 let audio: AudioContext | undefined;
+let contactBuffer: AudioBuffer | undefined;
 let lastSound = 0;
 const status = (message: string) => { $('status').textContent = message; };
 type Saved = { positions: number[][]; ones: number };
@@ -24,31 +25,36 @@ function restore(saved: Saved) {
 }
 try {
   const saved = JSON.parse(localStorage.getItem('soroban-v1') || 'null');
-  if (saved) { restore(saved); sound = saved.sound !== false; $('target').setAttribute('value', typeof saved.target === 'string' ? saved.target : ''); }
+  if (saved) { restore(saved); sound = saved.sound !== false; }
 } catch { /* Storage can be unavailable in private browsing. */ }
-const history: Saved[] = [];
-function remember() { history.push(snapshot()); if (history.length > 50) history.shift(); ($('undo') as HTMLButtonElement).disabled = false; }
 function save() {
-  try { localStorage.setItem('soroban-v1', JSON.stringify({ ...snapshot(), sound, target: ($('target') as HTMLInputElement).value })); } catch { /* The board still works without persistence. */ }
+  try { localStorage.setItem('soroban-v1', JSON.stringify({ ...snapshot(), sound })); } catch { /* The board still works without persistence. */ }
 }
 function unlockSound() {
   if (!sound) return;
   try { audio ??= new AudioContext(); void audio.resume().catch(() => {}); } catch { /* Some browsers have no audio device. */ }
 }
 function clickSound(strength = 100) {
-  if (!sound || !audio || audio.state !== 'running' || performance.now() - lastSound < 45) return;
+  if (!sound || !audio || audio.state !== 'running' || performance.now() - lastSound < 100) return;
   lastSound = performance.now();
-  const oscillator = audio.createOscillator(), gain = audio.createGain();
-  oscillator.type = 'triangle';
-  oscillator.frequency.setValueAtTime(420 + Math.min(strength, 400) * .5, audio.currentTime);
-  oscillator.frequency.exponentialRampToValueAtTime(160, audio.currentTime + .035);
-  gain.gain.setValueAtTime(.035, audio.currentTime);
-  gain.gain.exponentialRampToValueAtTime(.0001, audio.currentTime + .065);
-  oscillator.connect(gain); gain.connect(audio.destination);
-  oscillator.start(); oscillator.stop(audio.currentTime + .07);
-  oscillator.onended = () => { oscillator.disconnect(); gain.disconnect(); };
+  // Damped noise gives a dry contact without a pitched sweep or sliding tone.
+  if (!contactBuffer) {
+    contactBuffer = audio.createBuffer(1, Math.ceil(audio.sampleRate * .045), audio.sampleRate);
+    const data = contactBuffer.getChannelData(0);
+    let low = 0;
+    for (let i = 0; i < data.length; i++) {
+      const t = i / audio.sampleRate;
+      low = .65 * low + .35 * (Math.random() * 2 - 1);
+      data[i] = low * Math.exp(-t * 145) * Math.min(1, t / .001);
+    }
+  }
+  const source = audio.createBufferSource(), gain = audio.createGain();
+  source.buffer = contactBuffer; source.playbackRate.value = .92 + Math.random() * .16;
+  gain.gain.value = .12 + Math.min(strength, 400) / 400 * .12;
+  source.connect(gain); gain.connect(audio.destination); source.start();
+  source.onended = () => { source.disconnect(); gain.disconnect(); };
 }
-function soundLabel() { $('sound').setAttribute('aria-pressed', String(sound)); $('sound').innerHTML = `♪ <span>Sound ${sound ? 'on' : 'off'}</span>`; }
+function soundLabel() { $('sound').setAttribute('aria-pressed', String(sound)); $('sound').textContent = sound ? 'On' : 'Off'; }
 soundLabel();
 document.addEventListener('pointerdown', unlockSound, { passive: true });
 document.addEventListener('keydown', unlockSound);
@@ -82,10 +88,8 @@ for (let col = 0; col < COLUMNS; col++) {
     }
   }
 }
-const unit = element('path', { d: 'M-5,0 L5,0 L0,6Z', class: 'unit-marker' });
 function labels() {
   $('labels').innerHTML = '';
-  $('decimal').innerHTML = '';
   for (let i = 0; i < COLUMNS; i++) {
     const button = document.createElement('button');
     button.className = i === ones ? 'selected' : '';
@@ -94,14 +98,12 @@ function labels() {
     button.setAttribute('aria-pressed', String(i === ones));
     button.onclick = () => setOnes(i);
     $('labels').appendChild(button);
-    const option = document.createElement('option'); option.value = String(i); option.textContent = `${i + 1} from left`; option.selected = i === ones;
-    $('decimal').appendChild(option);
   }
-  unit.setAttribute('transform', `translate(${20 + (ones + .5) * 560 / COLUMNS} 124)`);
+  ($('decimal') as HTMLInputElement).value = String(ones);
+  $('decimal').setAttribute('aria-valuetext', `Ones at column ${ones + 1} from left; ${COLUMNS - ones - 1} decimal places`);
 }
-function setOnes(i: number) { if (i === ones) return; cancelPointers(); remember(); ones = i; labels(); render(); save(); status(`Column ${i + 1} is now ones. The beads have stayed in place.`); }
-$('decimal').onchange = () => setOnes(Number(($('decimal') as HTMLSelectElement).value));
-$('target').oninput = save;
+function setOnes(i: number) { if (i === ones) return; cancelPointers(); ones = i; labels(); render(); save(); status(`Column ${i + 1} is now ones.`); }
+$('decimal').oninput = () => setOnes(Number(($('decimal') as HTMLInputElement).value));
 let lastDigits = '';
 function render() {
   const values = board.map(digit);
@@ -120,7 +122,7 @@ function render() {
     lastDigits = key;
   }
 }
-type Pointer = { col: number; deck: 'upper' | 'lower'; index: number; offset: number; start: number; moved: boolean; y: number; time: number; el: Element };
+type Pointer = { col: number; deck: 'upper' | 'lower'; index: number; offset: number; start: number; moved: boolean; y: number; time: number; el: Element; contacts: Set<number> };
 const pointers = new Map<number, Pointer>();
 const coords = (e: PointerEvent) => { const rect = svg.getBoundingClientRect(); return (e.clientY - rect.top) * 390 / rect.height; };
 function cancelPointers() {
@@ -142,14 +144,14 @@ for (const node of nodes) {
   el.addEventListener('pointerdown', event => {
     const e = event as PointerEvent;
     if (e.button !== 0 || [...pointers.values()].some(p => p.col === col && p.deck === deck && p.index === index)) return;
-    e.preventDefault(); if (!pointers.size) remember();
+    e.preventDefault();
     const b = board[col][deck][index], y = coords(e);
-    pointers.set(e.pointerId, { col, deck, index, offset: y - b.y, start: y, moved: false, y: b.y, time: performance.now(), el });
+    pointers.set(e.pointerId, { col, deck, index, offset: y - b.y, start: y, moved: false, y: b.y, time: performance.now(), el, contacts: new Set() });
     b.held = true; b.v = 0; el.setPointerCapture(e.pointerId);
   });
   el.addEventListener('keydown', event => {
     const e = event as KeyboardEvent;
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); cancelPointers(); remember(); toggle(col, deck, index); }
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); cancelPointers(); toggle(col, deck, index); }
   });
 }
 svg.addEventListener('pointermove', e => {
@@ -163,7 +165,13 @@ svg.addEventListener('pointermove', e => {
   moveBead(beads, p.index, y - p.offset, bounds.min, bounds.max);
   const b = beads[p.index];
   b.v = Math.max(-380, Math.min(380, (b.y - p.y) / Math.max(.008, (now - p.time) / 1000)));
-  beads.forEach((other, i) => { if (i !== p.index && Math.abs(other.y - before[i]) > .1) { other.v = b.v * .45; clickSound(Math.abs(b.v)); } });
+  beads.forEach((other, i) => { if (i !== p.index && Math.abs(other.y - before[i]) > .1) {
+    other.v = b.v * .45;
+    if (!p.contacts.has(i)) { clickSound(Math.abs(b.v)); p.contacts.add(i); }
+  } });
+  const atStop = b.y <= bounds.min + p.index * SIZE + .1 || b.y >= bounds.max - (beads.length - 1 - p.index) * SIZE - .1;
+  if (atStop && !p.contacts.has(-1)) { clickSound(Math.abs(b.v)); p.contacts.add(-1); }
+  if (!atStop) p.contacts.delete(-1);
   p.y = b.y; p.time = now;
 });
 function endPointer(e: PointerEvent) {
@@ -178,23 +186,21 @@ function endPointer(e: PointerEvent) {
     const target = p.deck === 'upper' ? UPPER.max : LOWER.min + p.index * SIZE;
     // Contact assistance only within a few pixels of the counting position.
     if (Math.abs(b.y - target) < 9) { moveBead(board[p.col][p.deck], p.index, target, bounds.min, bounds.max); b.v = 0; }
-    clickSound();
   }
   save();
 }
 svg.addEventListener('pointerup', endPointer);
 svg.addEventListener('pointercancel', endPointer);
 svg.addEventListener('lostpointercapture', endPointer);
-function reset(shaken = false) { cancelPointers(); remember(); board = createBoard(); render(); save(); clickSound(); status(shaken ? 'Three shakes. A fresh start. Undo will bring your number back.' : 'Board cleared. A fresh start.'); }
+function reset(shaken = false) { cancelPointers(); board = createBoard(); render(); save(); clickSound(); status(shaken ? 'Three shakes. Board cleared.' : 'Board cleared.'); }
 $('reset').onclick = () => reset();
-$('undo').onclick = () => { const saved = history.pop(); if (!saved) return; cancelPointers(); restore(saved); labels(); render(); save(); ($('undo') as HTMLButtonElement).disabled = history.length === 0; status('Last change undone.'); };
 let previous = performance.now(), accumulator = 0, lastSave = previous;
 function frame(now: number) {
   accumulator += Math.min((now - previous) / 1000, .05); previous = now;
   while (accumulator >= 1 / 120) {
     for (const c of board) {
       const impact = Math.max(step(c.upper, UPPER.min, UPPER.max, 1 / 120), step(c.lower, LOWER.min, LOWER.max, 1 / 120));
-      if (impact > 70) clickSound(impact);
+      if (impact > 70 && !pointers.size) clickSound(impact);
     }
     accumulator -= 1 / 120;
   }
@@ -208,38 +214,52 @@ window.addEventListener('blur', cancelPointers);
 let motionEnabled = false, motionReceived = false, motionTimer: ReturnType<typeof setTimeout> | undefined;
 let detector = new ShakeDetector();
 let gravity: number[] | undefined;
+const motionStatus = (message: string) => { $('motion-status').textContent = message; };
+const blockedHelp = 'Motion is blocked or unavailable. In Brave on Android, allow Settings → Site settings → Motion sensors for this site, then retry Enable. On iPhone, check Motion & Orientation permission or try Safari.';
 function onMotion(event: DeviceMotionEvent) {
   if (!motionEnabled || document.hidden) return;
   const raw = event.acceleration;
   let values: number[];
-  if (raw && raw.x !== null && raw.y !== null && raw.z !== null) values = [raw.x, raw.y, raw.z];
+  if (raw && [raw.x, raw.y, raw.z].every(v => typeof v === 'number' && Number.isFinite(v))) values = [raw.x!, raw.y!, raw.z!];
   else {
     const a = event.accelerationIncludingGravity;
-    if (!a || a.x === null || a.y === null || a.z === null) return;
-    const axes = [a.x, a.y, a.z];
+    if (!a || ![a.x, a.y, a.z].every(v => typeof v === 'number' && Number.isFinite(v))) return;
+    const axes = [a.x!, a.y!, a.z!];
     gravity ??= [...axes];
     values = axes.map((v, i) => { gravity![i] = .85 * gravity![i] + .15 * v; return v - gravity![i]; });
   }
   if (!values.every(Number.isFinite)) return;
-  if (!motionReceived) { motionReceived = true; clearTimeout(motionTimer); status('Shake is ready. Three distinct shakes within two seconds will clear the board.'); }
+  if (!motionReceived) { motionReceived = true; clearTimeout(motionTimer); motionLabel(); motionStatus('Sensor connected. Three distinct shakes within two seconds will clear the board.'); }
   if (detector.sample(Math.hypot(...values), performance.now())) reset(true);
 }
-function motionLabel() { $('motion').setAttribute('aria-pressed', String(motionEnabled)); $('motion').innerHTML = `⌁ <span>${motionEnabled ? 'Shake on' : 'Enable shake'}</span>`; }
+function motionLabel() { $('motion').setAttribute('aria-pressed', String(motionEnabled && motionReceived)); $('motion').textContent = motionEnabled ? (motionReceived ? 'On' : 'Cancel') : 'Enable'; }
 $('motion').onclick = async () => {
-  if (motionEnabled) { motionEnabled = false; window.removeEventListener('devicemotion', onMotion); clearTimeout(motionTimer); motionLabel(); status('Shake reset is off.'); return; }
-  if (!window.isSecureContext || typeof DeviceMotionEvent === 'undefined') { status('Motion is unavailable here. On your phone, open this app over HTTPS. Clear board always works.'); return; }
+  if (motionEnabled) { motionEnabled = false; window.removeEventListener('devicemotion', onMotion); clearTimeout(motionTimer); motionLabel(); motionStatus('Shake reset is off.'); return; }
+  if (!window.isSecureContext || typeof DeviceMotionEvent === 'undefined') { motionStatus(blockedHelp); return; }
+  ($('motion') as HTMLButtonElement).disabled = true;
   try {
     const Motion = DeviceMotionEvent as typeof DeviceMotionEvent & { requestPermission?: () => Promise<string> };
-    if (Motion.requestPermission && await Motion.requestPermission() !== 'granted') { status('Motion permission was not granted. You can still use Clear board.'); return; }
+    // Request iOS access immediately inside the click; awaiting other APIs first loses user activation.
+    if (Motion.requestPermission && await Motion.requestPermission() !== 'granted') { motionStatus(blockedHelp); return; }
+    if (!Motion.requestPermission && navigator.permissions) {
+      const permissions = await Promise.all(['accelerometer', 'gyroscope'].map(name => navigator.permissions.query({ name: name as PermissionName }).catch(() => null)));
+      if (permissions.some(p => p?.state === 'denied')) { motionStatus(blockedHelp); return; }
+    }
     motionEnabled = true; motionReceived = false; gravity = undefined; detector = new ShakeDetector(); motionLabel();
     window.addEventListener('devicemotion', onMotion);
-    status('Waiting for your phone’s motion sensor…');
-    motionTimer = setTimeout(() => { if (!motionReceived && motionEnabled) { motionEnabled = false; window.removeEventListener('devicemotion', onMotion); motionLabel(); status('No motion data received. Check your browser’s motion permissions, or use Clear board.'); } }, 6000);
-  } catch { status('Motion access could not be enabled. Check your browser permissions and try again.'); }
+    motionStatus('Waiting for motion data. Move your phone gently to check the connection…');
+    motionTimer = setTimeout(() => { if (!motionReceived && motionEnabled) { motionEnabled = false; window.removeEventListener('devicemotion', onMotion); motionLabel(); motionStatus(blockedHelp); } }, 6000);
+  } catch { motionStatus(blockedHelp); }
+  finally { ($('motion') as HTMLButtonElement).disabled = false; }
 };
-const dialog = $('help-dialog') as HTMLDialogElement;
-$('help').onclick = () => dialog.showModal();
-$('close-help').onclick = () => dialog.close();
-dialog.addEventListener('click', e => { if (e.target === dialog) { const r = dialog.getBoundingClientRect(); if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) dialog.close(); } });
+const settings = $('settings-dialog') as HTMLDialogElement;
+const welcome = $('welcome-dialog') as HTMLDialogElement;
+$('settings').onclick = () => { cancelPointers(); settings.showModal(); };
+$('close-settings').onclick = () => settings.close();
+$('show-welcome').onclick = () => { settings.close(); welcome.showModal(); };
+$('start').onclick = () => welcome.close();
+welcome.addEventListener('close', () => { try { localStorage.setItem('soroban-welcomed', '1'); } catch { /* Optional first-visit memory. */ } });
+for (const dialog of [settings, welcome]) dialog.addEventListener('click', e => { if (e.target === dialog) { const r = dialog.getBoundingClientRect(); if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) dialog.close(); } });
+try { if (!localStorage.getItem('soroban-welcomed')) welcome.showModal(); } catch { welcome.showModal(); }
 labels(); render(); requestAnimationFrame(frame);
 if ('serviceWorker' in navigator && import.meta.url.includes('/assets/')) navigator.serviceWorker.register('/sw.js').catch(() => {});

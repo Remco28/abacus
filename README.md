@@ -20,15 +20,15 @@ npm run preview
 
 Slide beads toward the middle bar to count them. Upper beads count as five; lower beads count as one. Dragging pushes neighboring beads; tapping moves the selected group to or away from the bar. Counted beads light up. Multiple pointer identities allow simultaneous interaction, including upper and lower beads on the same rod.
 
-Choose a new ones rod using a place label or the decimal selector. Traditional marker dots stay fixed every third rod. The optional number field keeps a practice number visible; there are no challenges or scored exercises.
+Drag the gold caret horizontally along the counting bar to choose the ones rod and move the decimal. The slider also supports keyboard arrows; place labels remain tappable. Traditional marker dots stay fixed every third rod. The board fills the viewport, with only the number, Clear, and Settings above it. A dismissible logo welcome appears on the first visit.
 
-Sound is on by default and starts after the first user interaction. Enable shake explicitly to request motion access. Three distinct acceleration peaks within two seconds reset the board; a cooldown prevents repeated resets. Undo reverses reset and bead changes. If motion is denied or no sensor data arrives, the app explains the fallback. Motion availability and sensitivity need testing on actual phones. No motion data leaves the device.
+Sound is on by default and starts after the first user interaction. Short damped noise taps play on contacts; there is no continuous sliding tone. Sound, shake, and help live in Settings. Enable shake explicitly to request motion access. Three distinct acceleration peaks within two seconds reset the board; a cooldown prevents repeated resets. Motion shows On only after valid sensor data arrives. Denied permissions and absent readings show actionable guidance. Brave Android may require Settings → Site settings → Motion sensors; a website cannot override that browser setting. Motion availability and sensitivity need testing on actual phones. No motion data leaves the device.
 
 ## Architecture
 
 TypeScript, Vite, SVG, and a custom one-dimensional rigid-body simulation. Beads have equal effective mass, fixed rod constraints, collision impulses, low restitution, and velocity damping. Dragging directly pushes contacting beads. A small contact tolerance helps count beads seated against the bar. This is a controllable approximation, not a full physical replica. Beads do not move with phone tilt.
 
-The board, practice number, and sound preference persist locally. Motion permission is deliberately enabled each session. No accounts, backend, analytics, or third-party runtime requests. A service worker caches the built app for offline use. Storage can be cleared by the browser.
+The board, sound preference, and welcome dismissal persist locally. Motion permission is deliberately enabled each session. No accounts, backend, analytics, or third-party runtime requests. A service worker caches the built app for offline use. Storage can be cleared by the browser.
 
 ## Deployment
 
@@ -44,6 +44,6 @@ After DNS validates and GitHub issues a certificate, enable **Enforce HTTPS** in
 
 ## Verification
 
-`npm test` covers digits 0–9, contiguous counting, decimal precision, bead pushing, collision energy/constraints, and shake timing/debounce. Browser checks cover phone portrait and landscape, tap/drag, simultaneous pointers, undo/reset, keyboard, persistence, and offline loading. Synthetic motion/pointer tests do not replace physical iPhone and Android validation.
+`npm test` covers digits 0–9, contiguous counting, decimal precision, bead pushing, collision energy/constraints, and shake timing/debounce. `node tests/browser.mjs <CDP HTTP endpoint> <app URL>` checks simultaneous touch, drag/keyboard decimal control, persistence, first-visit welcome dismissal, shake reset, denied/no-data sensor guidance, and landscape layout. Synthetic motion/pointer tests do not replace physical iPhone and Android validation.
 
 Traditional unit dots: [League of Japan Abacus Associations](https://www.shuzan.jp/english/preliminary/). Hosting: [GitHub custom-domain documentation](https://docs.github.com/en/pages/configuring-a-custom-domain-for-your-github-pages-site).

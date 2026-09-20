@@ -1,5 +1,7 @@
 # Soroban Learning App — Discussion Notes
 
+> Mobile refinement: the board fills the viewport. Decimal placement uses a draggable gold caret on the bar. Retain the live number and compact Clear/Settings controls. Remove the target-number field, undo button, instructional captions, and footer. Move sound, shake, and help into Settings; show the logo in a dismissible first-visit welcome. Use short contact sounds without repeated sliding tones. Report motion permission blocks and missing sensor data with Brave-specific guidance. This refinement supersedes earlier presentation decisions below.
+
 > Current scope (September 19, 2026): mobile-first free play, client-only PWA, published publicly as Remco28/abacus on GitHub Pages at abacus.teamremco.org. Real rod-constrained bead physics, simultaneous touch, counted-bead highlights, traditional dots every third rod, adjustable ones position and beginner place labels. Sound defaults on; three-shake reset is core. Optional manually entered practice number, no challenge mode or exercise generator. Desktop tutorials are deferred. Earlier proposals below are brainstorming history; this paragraph and README.md supersede conflicting MVP suggestions.
 
 ## Product idea
