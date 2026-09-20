@@ -1,4 +1,4 @@
-const CACHE = 'soroban-v3';
+const CACHE = 'soroban-v4';
 self.addEventListener('install', event => {
   event.waitUntil((async () => {
     const cache = await caches.open(CACHE);

@@ -14,7 +14,7 @@
   <main>
     <section class="workspace" aria-label="Interactive soroban">
       <header class="readout"><output id="value" aria-label="Current board value">0</output><div class="controls"><button id="reset" class="quiet" aria-label="Clear board">↺ <span>Clear</span></button><button id="settings" class="quiet" aria-label="Settings">⚙</button></div></header>
-      <div class="board-wrap"><div id="labels" class="labels"></div><div class="board-stage"><svg id="board" viewBox="0 0 600 390" role="group" aria-label="Soroban: move beads toward the middle bar to count them"></svg><div class="decimal-slider"><label for="decimal">Ones</label><input id="decimal" type="range" min="0" max="5" step="1" value="3" aria-label="Ones column — slide to change decimal place" /></div></div><div id="digits" class="digits" aria-label="Value of each column"></div></div>
+      <div class="board-wrap"><div id="labels" class="labels"></div><div class="board-stage"><svg id="board" viewBox="0 0 600 390" role="group" aria-label="Soroban: move beads toward the middle bar to count them"></svg><div class="decimal-slider"><input id="decimal" type="range" min="0" max="5" step="1" value="3" aria-label="Ones column — slide to change decimal place" /></div></div><div id="digits" class="digits" aria-label="Value of each column"></div></div>
     </section>
     <p id="status" class="sr-only" role="status" aria-live="polite"></p>
   </main>
