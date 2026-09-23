@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  addMove, subMove, movesFor, answerOf, runningTotals, generate, problemLines, describe, fitsStep,
+  addMove, subMove, movesFor, answerOf, runningTotals, generate, generateSet, sheetSize, problemLines, describe, fitsStep,
   MOVE_STEPS, MUL_STEPS, MOVE_STEP_COUNT, MUL_STEP_COUNT, moveStepLabel, mulStepLabel,
   CAPACITY, MULTI_ROW, PLACES, TEST_ONES, SIGN, type Operation,
 } from '../src/problems';
@@ -109,6 +109,53 @@ test('an out-of-range rung falls back to one that exists', () => {
   }
   assert.match(moveStepLabel(999), /ten rows/, 'a rung number past the end means the last one');
   assert.match(mulStepLabel(0), /^1 · 1 × 1$/, 'and below the start means the first');
+});
+
+test('a sheet never repeats a problem and stays on its rung', () => {
+  for (let rung = 1; rung <= MOVE_STEP_COUNT; rung++) {
+    for (const op of ['add', 'sub'] as const) {
+      const step = MOVE_STEPS[rung - 1];
+      const sheet = generateSet([op], levels(rung, 1), seeded(rung * 977 + op.charCodeAt(0)));
+      assert.ok(sheet.length > 0, `${step.name} produced an empty sheet`);
+      assert.ok(sheet.length <= sheetSize([op], levels(rung, 1)), `${step.name} overfilled its sheet`);
+      assert.equal(new Set(sheet.map(describe)).size, sheet.length, `${step.name} wrote the same problem twice`);
+      for (const problem of sheet) {
+        assert.equal(problem.op, op);
+        assert.ok(fitsStep(op, problem.operands, step), `${describe(problem)} does not belong on ${step.name}`);
+      }
+    }
+  }
+  for (let rung = 1; rung <= MUL_STEP_COUNT; rung++) {
+    const spec = MUL_STEPS[rung - 1];
+    const sheet = generateSet(['mul'], levels(1, rung), seeded(rung * 131));
+    assert.ok(sheet.length > 0, `${spec.name} produced an empty sheet`);
+    assert.equal(new Set(sheet.map(describe)).size, sheet.length, `${spec.name} wrote the same problem twice`);
+    for (const problem of sheet) {
+      assert.equal(problem.op, 'mul');
+      assert.equal(problem.answer, problem.operands[0] * problem.operands[1]);
+    }
+  }
+});
+
+test('a sheet is sized to its rung, and the tightest rung just comes up short', () => {
+  // Rung one is the smallest space on either ladder. Even there a sheet must
+  // fill without repeating, which is the whole reason it asks for so few.
+  const tightest = sheetSize(['add'], levels(1, 1));
+  assert.ok(tightest >= 5, `the smallest sheet is still worth printing: ${tightest}`);
+  const sheet = generateSet(['add'], levels(1, 1), seeded(7));
+  assert.equal(sheet.length, tightest, 'the tightest rung fills its own sheet');
+  assert.equal(new Set(sheet.map(describe)).size, sheet.length, 'and still does not repeat');
+  // The bottom of a ladder asks for less than the top, on both ladders.
+  assert.ok(sheetSize(['add'], levels(MOVE_STEP_COUNT, 1)) > tightest, 'the exam rungs ask for a longer sheet');
+  assert.ok(sheetSize(['mul'], levels(1, MUL_STEP_COUNT)) > sheetSize(['mul'], levels(1, 1)), 'multiplying widens the same way');
+});
+
+test('a mixed sheet is only as long as its shortest rung can fill', () => {
+  const both = sheetSize(['add', 'mul'], levels(MOVE_STEP_COUNT, MUL_STEP_COUNT));
+  assert.equal(both, Math.min(MOVE_STEPS[MOVE_STEP_COUNT - 1].sheet, MUL_STEPS[MUL_STEP_COUNT - 1].sheet), 'the tightest rung decides');
+  assert.equal(sheetSize([], levels(1, 1)), MOVE_STEPS[0].sheet, 'no selection still asks for a sheet');
+  const sheet = generateSet(['add', 'mul'], levels(2, 1), seeded(3));
+  assert.ok(sheet.every((problem) => problem.op === 'add' || problem.op === 'mul'), 'a mixed sheet draws from what was chosen');
 });
 
 test('a problem reads like the written column', () => {

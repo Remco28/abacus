@@ -41,3 +41,18 @@ dialog{width:min(440px,calc(100% - 32px));max-height:calc(100dvh - 32px);border:
 body.testing #decimal-lock{display:none}body.testing #reset span{display:none}body.testing .controls .action{background:#edf0e5}
 #problem-dialog{overflow-y:auto}.problem-lines{font-size:clamp(24px,6vw,34px);line-height:1.4;text-align:right;font-variant-numeric:tabular-nums;padding:2px 10px}.problem-lines.wide{font-size:clamp(17px,3.6vw,22px);line-height:1.3}.problem-lines .rule{border-top:2px solid #e3e6d8;margin-top:6px;padding-top:6px}.problem-note{color:#66745d;font-size:14px;margin:16px 0 0}.problem-lines .line{display:block;width:100%;font:inherit;font-variant-numeric:inherit;color:inherit;text-align:right;background:none;border:0;padding:0;border-radius:8px}.problem-lines .line.steppable{cursor:pointer}.problem-lines .line.marked{background:#e8ecdf;box-shadow:inset -3px 0 0 #cb9754}.problem-lines .line:focus-visible{outline:2px solid var(--green);outline-offset:2px}.problem-step{color:#66745d;font-size:14px;margin:12px 0 0}.problem-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:20px}.problem-actions button{border-radius:9px;padding:10px 16px;min-height:44px;background:#e8ecdf;color:#4c6253}
 .decimal-slider[data-hint]::after { content: attr(data-hint); position: absolute; left: clamp(64px, var(--caret-left), calc(100% - 64px)); top: -30px; transform: translateX(-50%); padding: 4px 9px; border-radius: 6px; background: #183e36; color: #fff4d5; font-size: 12px; white-space: nowrap; pointer-events: none; }
+.setting-group h3{font-size:12px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:#7d8b71;margin:22px 0 2px}.setting-group:first-of-type h3{margin-top:16px}
+#worksheet{border-radius:20px;padding:10px 16px;min-width:80px;min-height:44px;background:#e8ecdf;color:#4c6253}
+.sheet-note{color:#66745d;font-size:14px;margin:0 0 12px}.sheet-list{list-style:none;margin:0;padding:0;max-height:min(440px,calc(100dvh - 272px));overflow-y:auto}.sheet-item{display:flex;align-items:baseline;gap:10px;padding:8px 0;border-bottom:1px solid #e6e9dc}.sheet-item:last-child{border-bottom:0}.sheet-index{flex:0 0 1.6em;text-align:right;color:#8b9779;font-size:15px;font-variant-numeric:tabular-nums}.sheet-problem{flex:1;padding:4px 8px;border-radius:8px;background:none;color:inherit;text-align:right;font-size:clamp(17px,4.4vw,22px);line-height:1.35;font-variant-numeric:tabular-nums}.sheet-problem:hover{background:#f1f3e8}.sheet-line{display:block}.sheet-total{display:block;margin-top:5px;padding-top:5px;border-top:2px solid #e3e6d8;color:var(--green);font-weight:700}
+@media print {
+  main, #settings-dialog, #welcome-dialog, #problem-dialog { display: none !important; }
+  #worksheet-dialog { position: static; width: auto; max-width: none; max-height: none; margin: 0; padding: 0; border: 0; border-radius: 0; background: #fff; color: #000; box-shadow: none; overflow: visible; }
+  #worksheet-dialog::backdrop { display: none; }
+  #worksheet-dialog .close, #sheet-actions, #sheet-note { display: none; }
+  #worksheet-dialog h2 { font-size: 19px; margin: 0 0 10px; }
+  .sheet-list { max-height: none; overflow: visible; columns: 2; column-gap: 28px; }
+  .sheet-item { break-inside: avoid; page-break-inside: avoid; }
+  .sheet-problem { padding: 0; font-size: 15px; }
+  .sheet-problem:hover { background: none; }
+  .sheet-total { border-top-color: #999; }
+}

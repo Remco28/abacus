@@ -187,8 +187,68 @@ try {
   await evaluate('const d=document.querySelector("#decimal");d.value="5";d.dispatchEvent(new Event("input"))');
   assert.equal(await text('#value'), `${answer}`, 'the decimal moves again outside test mode');
 
+  // The worksheet. A sheet is for a soroban you are holding, so it has to work
+  // with test mode off and leave the board exactly where it found it.
+  const boardBefore = await text('#value');
+  await click('#settings');
+  await evaluate('const s=document.querySelector("#move-level");s.value="1";s.dispatchEvent(new Event("change"))');
+  await click('#worksheet');
+  assert.equal(await evaluate('document.querySelector("#worksheet-dialog").open'), true, 'a sheet opens from settings');
+  assert.equal(await evaluate('document.querySelector("#settings-dialog").open'), false, 'and settings steps aside');
+  assert.match(await text('#sheet-note'), /^8 problems at 1 · direct, one digit/, 'the sheet names its rung and the short length that rung can fill');
+
+  const sheet = () => evaluate('[...document.querySelectorAll("#sheet-lines .sheet-item")].map(li=>({index:li.querySelector(".sheet-index").textContent,lines:[...li.querySelectorAll(".sheet-line")].map(s=>s.textContent),total:li.querySelector(".sheet-total")?.textContent??null}))');
+  const answered = (lines) => lines.reduce((sum, line, i) => sum + (i ? Number(line.replace(/^[+−×]\s*/, '')) : Number(line)), 0);
+
+  let rows = await sheet();
+  assert.equal(rows.length, 8, 'a sheet is sized to its rung');
+  assert.deepEqual(rows.map((r) => r.index), ['1', '2', '3', '4', '5', '6', '7', '8'], 'and it is numbered');
+  assert.equal(new Set(rows.map((r) => r.lines.join(' '))).size, rows.length, 'no problem is written twice');
+  assert.ok(rows.every((r) => r.lines.length === 2), 'a two-row rung asks two-row problems');
+  assert.ok(rows.every((r) => r.total === null), 'and no answer is given away');
+  assert.equal(await evaluate('getComputedStyle(document.querySelector("#sheet-lines .sheet-problem")).textAlign'), 'right', 'places line up, as they must on paper');
+
+  // Checking is one problem at a time, and tapping again puts the answer back.
+  await evaluate('document.querySelectorAll("#sheet-lines .sheet-item")[2].querySelector(".sheet-problem").click()');
+  rows = await sheet();
+  assert.deepEqual(rows.map((r) => r.total !== null), [false, false, true, false, false, false, false, false], 'one tap checks one problem');
+  assert.equal(Number(rows[2].total.match(/^= (\d+)$/)[1]), answered(rows[2].lines), 'the answer is the sum of its own lines');
+  await evaluate('document.querySelectorAll("#sheet-lines .sheet-item")[2].querySelector(".sheet-problem").click()');
+  assert.ok((await sheet()).every((r) => r.total === null), 'a second tap puts the answer away');
+
+  // The sheet and its checked problem outlive a reload, which is the point of a
+  // sheet: you put the phone down and pick it up again an hour later.
+  await evaluate('document.querySelectorAll("#sheet-lines .sheet-item")[4].querySelector(".sheet-problem").click()');
+  const checked = (await sheet())[4];
+  await send('Page.reload');
+  await pause(900);
+  await click('#settings');
+  await click('#worksheet');
+  rows = await sheet();
+  assert.equal(rows.length, 8, 'the same sheet comes back');
+  assert.deepEqual(rows[4], checked, 'with the problem you checked still checked');
+
+  // Changing a rung gives a sheet to match, rather than a stale one.
+  await click('#close-sheet');
+  await click('#settings');
+  await evaluate('const s=document.querySelector("#move-level");s.value="11";s.dispatchEvent(new Event("change"))');
+  await click('#worksheet');
+  rows = await sheet();
+  assert.equal(rows.length, 20, 'the top of the ladder asks for a longer sheet');
+  assert.equal(new Set(rows.map((r) => r.lines.join(' '))).size, rows.length, 'and still does not repeat itself');
+
+  // Paper. Two columns, and the board and its chrome left off the page.
+  await send('Emulation.setEmulatedMedia', { media: 'print' });
+  assert.equal(await evaluate('getComputedStyle(document.querySelector("main")).display'), 'none', 'printing leaves the board off the page');
+  assert.equal(await evaluate('getComputedStyle(document.querySelector("#sheet-lines")).columnCount'), '2', 'and sets the sheet in two columns');
+  assert.equal(await evaluate('getComputedStyle(document.querySelector("#sheet-actions")).display'), 'none', 'with no buttons on the paper');
+  await send('Emulation.setEmulatedMedia', { media: '' });
+
+  assert.equal(await text('#value'), boardBefore, 'nothing about a sheet has touched the board');
+  await click('#close-sheet');
+
   assert.deepEqual(errors, [], `no browser exceptions: ${JSON.stringify(errors[0] ?? null)}`);
-  console.log('PASS: test mode normalizes and holds the decimal, reads the problem in a dialog, judges clear/keep/reveal, accepts and rejects answers, restores the decimal, and persists.');
+  console.log('PASS: test mode normalizes and holds the decimal, reads the problem in a dialog, judges clear/keep/reveal, accepts and rejects answers, restores the decimal, and persists; a worksheet is sized to its rung, numbered, never repeated, checked one problem at a time, saved, laid out two-up for paper, and leaves the board alone.');
 } finally {
   ws.close();
 }

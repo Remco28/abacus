@@ -1,6 +1,6 @@
 import './style.css';
 import { COLUMNS, SIZE, UPPER, LOWER, createBoard, digit, formatValue, placeName, moveBead, step, ShakeDetector } from './model';
-import { CAPACITY, MOVE_STEP_COUNT, MUL_STEP_COUNT, TEST_ONES, describe as describeProblem, generate, moveStepLabel, mulStepLabel, problemLines, type Levels, type Operation, type Problem } from './problems';
+import { CAPACITY, MOVE_STEP_COUNT, MUL_STEP_COUNT, TEST_ONES, describe as describeProblem, generate, generateSet, moveStepLabel, mulStepLabel, problemLines, type Levels, type Operation, type Problem } from './problems';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const svg = document.getElementById('board') as unknown as SVGSVGElement;
@@ -16,17 +16,25 @@ type Verdict = 'none' | 'right' | 'wrong' | 'revealed';
 // where they got to, not something the generator has any business knowing.
 type TestState = { on: boolean; ops: Operation[]; levels: Levels; problem: Problem | null; onesBefore: number; verdict: Verdict; step: number };
 let test: TestState = { on: false, ops: ['add'], levels: { move: 1, mul: 1 }, problem: null, onesBefore: 3, verdict: 'none', step: -1 };
+// The worksheet: a set of problems for working on a soroban of your own rather
+// than the one on screen. It reads the same rungs, but it never touches the
+// board, which is what keeps it out from behind test mode.
+type SheetState = { config: string; problems: Problem[]; revealed: number[] };
+let sheet: SheetState = { config: '', problems: [], revealed: [] };
 let decimalFrozen = false;
 let audio: AudioContext | undefined;
 let contactBuffer: AudioBuffer | undefined;
 let lastSound = 0;
 const status = (message: string) => { $('status').textContent = message; };
 type SavedTest = { on: boolean; ops: Operation[]; levels: Levels; problem: Problem | null; onesBefore: number; step: number };
-type Saved = { positions: number[][]; ones: number; test?: SavedTest };
+// A sheet is saved with the rungs it was built from, so changing a rung gives a
+// sheet to match rather than a stale one.
+type SavedSheet = { config: string; problems: Problem[]; revealed: number[] };
+type Saved = { positions: number[][]; ones: number; test?: SavedTest; sheet?: SavedSheet };
 // One y per rod, upper bead first and then the four lower ones. A wipe remembers
 // the same shape, which is how it puts every bead back where it found it.
 const positions = () => board.map(c => [...c.upper, ...c.lower].map(b => b.y));
-const snapshot = (): Saved => ({ positions: positions(), ones, test: { on: test.on, ops: [...test.ops], levels: { ...test.levels }, problem: test.problem, onesBefore: test.onesBefore, step: test.step } });
+const snapshot = (): Saved => ({ positions: positions(), ones, sheet: { config: sheet.config, problems: sheet.problems, revealed: [...sheet.revealed] }, test: { on: test.on, ops: [...test.ops], levels: { ...test.levels }, problem: test.problem, onesBefore: test.onesBefore, step: test.step } });
 // A rung number is only trusted if its ladder is that long. A declaration, so
 // the restore below can call it before the selectors are built.
 function rungIn(rung: unknown, count: number): rung is number {
@@ -45,7 +53,7 @@ function restore(saved: Saved) {
 }
 try {
   const saved = JSON.parse(localStorage.getItem('soroban-v1') || 'null');
-  if (saved) { restore(saved); sound = saved.sound !== false; restoreTest(saved.test); }
+  if (saved) { restore(saved); sound = saved.sound !== false; restoreTest(saved.test); restoreSheet(saved.sheet); }
 } catch { /* Storage can be unavailable in private browsing. */ }
 // True while a tween owns the bead positions. Every save waits for it to settle,
 // because a half-travelled bead would fail the restore check on the next load and
@@ -468,13 +476,14 @@ const problemActions = $('problem-actions');
 const boardValue = () => formatValue(board.map(digit), ones);
 const currentValue = () => Number(boardValue());
 
-function addAction(label: string, primary: boolean, run: () => void) {
+// Used by the problem dialog and by the sheet, each with its own action row.
+function addAction(label: string, primary: boolean, run: () => void, into: HTMLElement = problemActions) {
   const button = document.createElement('button');
   button.type = 'button';
   button.textContent = label;
   button.className = primary ? 'primary' : '';
   button.onclick = run;
-  problemActions.appendChild(button);
+  into.appendChild(button);
 }
 
 // Tapping the line you are on marks it, and tapping it again clears the mark,
@@ -707,7 +716,104 @@ $('close-settings').onclick = () => settings.close();
 $('show-welcome').onclick = () => { settings.close(); welcome.showModal(); };
 $('start').onclick = () => welcome.close();
 welcome.addEventListener('close', () => { try { localStorage.setItem('soroban-welcomed', '1'); } catch { /* Optional first-visit memory. */ } });
-for (const dialog of [settings, welcome]) dialog.addEventListener('click', e => { if (e.target === dialog) { const r = dialog.getBoundingClientRect(); if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) dialog.close(); } });
+// --- Worksheet --------------------------------------------------------------
+// A sheet of problems to work on a soroban of your own. Nothing here is graded
+// and nothing touches the board: the whole point is that you are working
+// somewhere else, which is why a sheet needs no test mode to be useful.
+const sheetDialog = $('worksheet-dialog') as HTMLDialogElement;
+const sheetLines = $('sheet-lines');
+const sheetNote = $('sheet-note');
+const sheetActions = $('sheet-actions');
+// Which rungs a sheet was built from, so changing one gives a sheet to match
+// rather than a stale one — and so opening Settings does not throw away a sheet
+// you are part-way through.
+const configKey = () => `${[...test.ops].sort().join('+')}|${test.levels.move}|${test.levels.mul}`;
+const rungNames = () => {
+  const names: string[] = [];
+  if (test.ops.some((op) => op !== 'mul')) names.push(moveStepLabel(test.levels.move));
+  if (test.ops.includes('mul')) names.push(mulStepLabel(test.levels.mul));
+  return names.join(' · ');
+};
+
+function newSheet() {
+  sheet = { config: configKey(), problems: generateSet(test.ops, test.levels), revealed: [] };
+  renderSheet();
+  save();
+}
+
+// One tap checks one problem, and a second tap puts the answer away again, so a
+// sheet is never something you cannot un-mark.
+function toggleReveal(row: number) {
+  const shown = sheet.revealed.includes(row);
+  sheet.revealed = shown ? sheet.revealed.filter((each) => each !== row) : [...sheet.revealed, row];
+  renderSheet();
+  save();
+  const answer = sheet.problems[row].answer;
+  status(shown ? `Answer ${answer} hidden.` : `Problem ${row + 1} is ${answer}.`);
+}
+
+function renderSheet() {
+  sheetLines.innerHTML = '';
+  sheetActions.innerHTML = '';
+  const count = sheet.problems.length;
+  sheetNote.textContent = count ? `${count} problems at ${rungNames()}. Tap one to check it.` : '';
+  sheet.problems.forEach((problem, row) => {
+    const item = document.createElement('li');
+    item.className = 'sheet-item';
+    // Its own number, so the sheet reads as a numbered list on paper too.
+    const index = document.createElement('span');
+    index.className = 'sheet-index';
+    index.setAttribute('aria-hidden', 'true');
+    index.textContent = String(row + 1);
+    // A button, so a problem can be reached and checked without a pointer.
+    const body = document.createElement('button');
+    body.type = 'button';
+    body.className = 'sheet-problem';
+    for (const line of problemLines(problem)) {
+      const text = document.createElement('span');
+      text.className = 'sheet-line';
+      text.textContent = line;
+      body.appendChild(text);
+    }
+    if (sheet.revealed.includes(row)) {
+      const total = document.createElement('span');
+      total.className = 'sheet-total';
+      total.textContent = `= ${problem.answer}`;
+      body.appendChild(total);
+    }
+    body.onclick = () => toggleReveal(row);
+    item.append(index, body);
+    sheetLines.appendChild(item);
+  });
+  if (count) {
+    addAction('New sheet', true, newSheet, sheetActions);
+    addAction('Print', false, () => window.print(), sheetActions);
+  }
+}
+
+function openSheet() {
+  if (sheet.config !== configKey() || !sheet.problems.length) newSheet();
+  else renderSheet();
+  settings.close();
+  if (!sheetDialog.open) sheetDialog.showModal();
+  status(`${sheet.problems.length} problems on the sheet.`);
+}
+
+function restoreSheet(raw: unknown) {
+  if (!raw || typeof raw !== 'object') return;
+  const saved = raw as Partial<SavedSheet>;
+  if (typeof saved.config !== 'string' || !Array.isArray(saved.problems) || !saved.problems.length) return;
+  if (!saved.problems.every(isProblem)) return;
+  sheet.problems = saved.problems;
+  sheet.config = saved.config;
+  sheet.revealed = Array.isArray(saved.revealed)
+    ? saved.revealed.filter((row) => Number.isInteger(row) && row >= 0 && row < saved.problems!.length)
+    : [];
+}
+
+($('worksheet') as HTMLButtonElement).onclick = openSheet;
+($('close-sheet') as HTMLButtonElement).onclick = () => sheetDialog.close();
+for (const dialog of [settings, welcome, sheetDialog]) dialog.addEventListener('click', e => { if (e.target === dialog) { const r = dialog.getBoundingClientRect(); if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) dialog.close(); } });
 try { if (!localStorage.getItem('soroban-welcomed')) welcome.showModal(); } catch { welcome.showModal(); }
 labels(); render(); requestAnimationFrame(frame);
 if ('serviceWorker' in navigator && import.meta.url.includes('/assets/')) navigator.serviceWorker.register('/sw.js').catch(() => {});

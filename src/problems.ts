@@ -149,36 +149,45 @@ export type Step = {
   width: [number, number];
   /** How many numbers a problem has, lowest to highest. */
   rows: [number, number];
+  /** How many problems one practice sheet at this rung asks for. */
+  sheet: number;
 };
 
 const ANY: Move[] = ['direct', 'small', 'big', 'double'];
 
 // Adding and taking away. Each rung introduces one thing: a wider number on a
 // rung already learned, then a new move, then more rows to hold your place in.
+// `sheet` is how many problems one practice sheet asks for, and it is measured
+// rather than picked: counting the distinct problems each rung can produce, the
+// one-digit rungs run from about 26 up to 500, the two-digit ones sit in the low
+// thousands, and the ten-row rungs are wide open. A sheet is therefore short at
+// the bottom of a ladder and long at the top, and it never pads itself out.
 export const MOVE_STEPS: Step[] = [
-  { name: 'direct, one digit', teaches: 'direct', allows: ['direct'], width: [1, 1], rows: [2, 2] },
-  { name: 'direct, two digits', teaches: 'direct', allows: ['direct'], width: [2, 2], rows: [2, 2] },
-  { name: 'small friends, one digit', teaches: 'small', allows: ['direct', 'small'], width: [1, 1], rows: [2, 3] },
-  { name: 'small friends, two digits', teaches: 'small', allows: ['direct', 'small'], width: [2, 2], rows: [2, 3] },
-  { name: 'big friends, one digit', teaches: 'big', allows: ['direct', 'small', 'big'], width: [1, 1], rows: [2, 3] },
-  { name: 'big friends, two digits', teaches: 'big', allows: ['direct', 'small', 'big'], width: [2, 2], rows: [2, 3] },
-  { name: 'double combination, one digit', teaches: 'double', allows: ANY, width: [1, 1], rows: [2, 3] },
-  { name: 'double combination, two digits', teaches: 'double', allows: ANY, width: [2, 2], rows: [2, 3] },
-  { name: 'mixed moves, five rows', teaches: null, allows: ANY, width: [2, 2], rows: [5, 5] },
-  { name: 'ten rows, one to two digits', teaches: null, allows: ANY, width: [1, 2], rows: [MULTI_ROW, MULTI_ROW] },
-  { name: 'ten rows, up to four digits', teaches: null, allows: ANY, width: [1, 4], rows: [MULTI_ROW, MULTI_ROW] },
+  { name: 'direct, one digit', teaches: 'direct', allows: ['direct'], width: [1, 1], rows: [2, 2], sheet: 8 },
+  { name: 'direct, two digits', teaches: 'direct', allows: ['direct'], width: [2, 2], rows: [2, 2], sheet: 12 },
+  { name: 'small friends, one digit', teaches: 'small', allows: ['direct', 'small'], width: [1, 1], rows: [2, 3], sheet: 10 },
+  { name: 'small friends, two digits', teaches: 'small', allows: ['direct', 'small'], width: [2, 2], rows: [2, 3], sheet: 12 },
+  { name: 'big friends, one digit', teaches: 'big', allows: ['direct', 'small', 'big'], width: [1, 1], rows: [2, 3], sheet: 10 },
+  { name: 'big friends, two digits', teaches: 'big', allows: ['direct', 'small', 'big'], width: [2, 2], rows: [2, 3], sheet: 14 },
+  { name: 'double combination, one digit', teaches: 'double', allows: ANY, width: [1, 1], rows: [2, 3], sheet: 10 },
+  { name: 'double combination, two digits', teaches: 'double', allows: ANY, width: [2, 2], rows: [2, 3], sheet: 14 },
+  { name: 'mixed moves, five rows', teaches: null, allows: ANY, width: [2, 2], rows: [5, 5], sheet: 12 },
+  { name: 'ten rows, one to two digits', teaches: null, allows: ANY, width: [1, 2], rows: [MULTI_ROW, MULTI_ROW], sheet: 16 },
+  { name: 'ten rows, up to four digits', teaches: null, allows: ANY, width: [1, 4], rows: [MULTI_ROW, MULTI_ROW], sheet: 20 },
 ];
 
 // Multiplying is bookkeeping on top of the times table, so its ladder is
 // operand width, and the multiplier's width is what adds partial products.
-// 999 x 999 = 998001 is the widest that still fits the six rods.
-export const MUL_STEPS: { name: string; factor: [number, number]; other: [number, number] }[] = [
-  { name: '1 × 1', factor: [2, 9], other: [2, 9] },
-  { name: '1 × 2', factor: [2, 9], other: [10, 99] },
-  { name: '1 × 3', factor: [2, 9], other: [100, 999] },
-  { name: '2 × 2', factor: [10, 99], other: [10, 99] },
-  { name: '2 × 3', factor: [10, 99], other: [100, 999] },
-  { name: '3 × 3', factor: [100, 999], other: [100, 999] },
+// 999 x 999 = 998001 is the widest that still fits the six rods. Its sheet sizes
+// follow the same measurement as the other ladder: the smallest rung holds only
+// 64 distinct problems, so it asks for a shorter sheet than the three-digit ones.
+export const MUL_STEPS: { name: string; factor: [number, number]; other: [number, number]; sheet: number }[] = [
+  { name: '1 × 1', factor: [2, 9], other: [2, 9], sheet: 10 },
+  { name: '1 × 2', factor: [2, 9], other: [10, 99], sheet: 12 },
+  { name: '1 × 3', factor: [2, 9], other: [100, 999], sheet: 14 },
+  { name: '2 × 2', factor: [10, 99], other: [10, 99], sheet: 14 },
+  { name: '2 × 3', factor: [10, 99], other: [100, 999], sheet: 16 },
+  { name: '3 × 3', factor: [100, 999], other: [100, 999], sheet: 20 },
 ];
 
 export const MOVE_STEP_COUNT = MOVE_STEPS.length;
@@ -272,4 +281,39 @@ export function generate(ops: Operation[], levels: Levels, rand: () => number = 
     if (problem) return problem;
   }
   return lastResort(options[0], levels);
+}
+
+/**
+ * How long a practice sheet is: the shortest rung in play decides, so a sheet
+ * mixing addition and multiplication is still something multiplication's
+ * smallest rung can fill without repeating itself.
+ */
+export function sheetSize(ops: Operation[], levels: Levels): number {
+  const options = ops.length ? ops : (['add'] as Operation[]);
+  return Math.min(...options.map((op) => (op === 'mul'
+    ? MUL_STEPS[stepIndex(levels.mul, MUL_STEP_COUNT)].sheet
+    : MOVE_STEPS[stepIndex(levels.move, MOVE_STEP_COUNT)].sheet)));
+}
+
+/**
+ * A sheet is a set of problems for working on a soroban of your own, not the one
+ * on screen, so nothing is judged and nothing has to be hidden: the numbers just
+ * have to hold still while you work. No problem appears twice, because the same
+ * sum written out twice reads as a fault — which is why a rung with a small
+ * space of its own comes back as a shorter sheet rather than a padded one.
+ */
+export function generateSet(ops: Operation[], levels: Levels, rand: () => number = Math.random): Problem[] {
+  const target = sheetSize(ops, levels);
+  const seen = new Set<string>();
+  const sheet: Problem[] = [];
+  // Bounded, because a rung only a little larger than the sheet would otherwise
+  // keep drawing problems it already has and never finish.
+  for (let tries = 0; tries < target * 40 && sheet.length < target; tries++) {
+    const problem = generate(ops, levels, rand);
+    const key = describe(problem);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    sheet.push(problem);
+  }
+  return sheet;
 }
