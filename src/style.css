@@ -14,7 +14,14 @@ dialog{width:min(440px,calc(100% - 32px));max-height:calc(100dvh - 32px);border:
   .board-wrap { min-width: 0; padding: 4px 8px 4px; }
   .board-stage { order: 0; }
   .digits { order: 1; flex-basis: 22px; font-size: 15px; }
-  .labels { order: 2; flex-basis: 44px; }
+  /* The place names are dropped in landscape. The row costs 44px of a viewport
+     that is already the short one, and the board takes all of it back: the stage
+     is flex:1 and the SVG is stretched with preserveAspectRatio=none, so the
+     beads grow taller and easier to hit. The tally still names the number and
+     the digits row still reports every rod, so the values stay readable. The
+     order and basis are kept so that restoring the names is deleting the
+     display:none from the rule below, and nothing else. */
+  .labels { order: 2; flex-basis: 44px; display: none; }
   .labels small { display: none; }
   .bead-face { transform: scaleY(1.1); }
 }
