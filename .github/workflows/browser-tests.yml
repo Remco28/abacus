@@ -1,0 +1,28 @@
+name: Browser tests
+
+# Separate from the deploy workflow on purpose. These drive a real browser over
+# the Chrome DevTools Protocol, which is the only way to catch the things unit
+# tests cannot see — a wipe that strands a bead, a save that drops a board. They
+# are not a prerequisite for shipping, so a hiccup here cannot hold up a release.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # The runner starts its own dev server and headless Chrome, one fresh
+      # profile per suite, so nothing is shared between them.
+      - run: npm run test:browser

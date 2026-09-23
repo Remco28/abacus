@@ -12,9 +12,15 @@ Requires Node.js 22.12+ (or a current Node 24 release).
 npm ci
 npm run dev
 npm test
+npm run test:browser
 npm run build
 npm run preview
 ```
+
+`npm test` is the unit suite and needs nothing installed. `npm run test:browser`
+drives the built app through a real headless Chromium; it starts its own dev
+server and one fresh browser profile per suite, so the two suites never share
+saved board state. Set `CHROME_BIN` to point at a particular browser.
 
 ## Play
 
@@ -54,6 +60,6 @@ After DNS validates and GitHub issues a certificate, enable **Enforce HTTPS** in
 
 ## Verification
 
-`npm test` covers digits 0–9, contiguous counting, decimal precision, bead pushing, collision energy/constraints, shake timing/debounce, and the practice-mode generator: the complement classifier, every rung of both ladders, the board's capacity, and subtraction that never passes through a negative total. `node tests/browser.mjs <CDP HTTP endpoint> <app URL>` checks simultaneous touch, drag/keyboard decimal control, the reckoning-bar wipe (following the finger, springing back on a short swipe, clearing on a full traverse, and ignoring a tap), persistence, first-visit welcome dismissal, shake reset, denied/no-data sensor guidance, and landscape layout. `node tests/browser-testmode.mjs <CDP HTTP endpoint> <app URL>` checks practice mode end to end: normalizing and holding the decimal, reading a problem in its dialog, clear/keep/reveal on a wrong answer, accepting and rejecting answers, marking your place in a column, restoring the decimal on exit, and the problem, the board and the mark surviving a reload. Synthetic motion/pointer tests do not replace physical iPhone and Android validation.
+`npm test` covers digits 0–9, contiguous counting, decimal precision, bead pushing, collision energy/constraints, shake timing/debounce, and the practice-mode generator: the complement classifier, every rung of both ladders, the board's capacity, sheet sizing and uniqueness, and subtraction that never passes through a negative total. `npm run test:browser` runs both browser suites. `browser.mjs` checks simultaneous touch, drag/keyboard decimal control, the reckoning-bar wipe (following the finger, springing back on a short swipe with every bead landing back where it started, clearing on a full traverse, and ignoring a tap), persistence, first-visit welcome dismissal, shake reset, denied/no-data sensor guidance, and landscape layout. `browser-testmode.mjs` checks practice mode end to end: normalizing and holding the decimal, reading a problem in its dialog, clear/keep/reveal on a wrong answer, accepting and rejecting answers, marking your place in a column, restoring the decimal on exit, and the problem, the board and the mark surviving a reload. Synthetic motion/pointer tests do not replace physical iPhone and Android validation.
 
 Traditional unit dots: [League of Japan Abacus Associations](https://www.shuzan.jp/english/preliminary/). Hosting: [GitHub custom-domain documentation](https://docs.github.com/en/pages/configuring-a-custom-domain-for-your-github-pages-site).
