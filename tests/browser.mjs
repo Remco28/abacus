@@ -66,9 +66,13 @@ try {
   // partway across. Only a full traverse commits: a shorter one springs them
   // back, which is what stops a graze from destroying the number in progress.
   const shown = () => evaluate('document.querySelector("#value").textContent');
-  // Raw bead transforms, which is the only way to see a spring back that lands
-  // close enough to keep the digit but leaves a visible gap in the stack.
-  const beadPlace = () => evaluate('[...document.querySelectorAll("#board .bead")].map(e=>e.getAttribute("transform"))');
+  // Raw bead heights, which is the only way to see a spring back that lands close
+  // enough to keep the digit but leaves a visible gap in the stack. Compared
+  // numerically rather than as strings: the solver converges to rest to within a
+  // few 1e-14, and requiring an exact float match turns that into a failure. A
+  // bead left out of place is off by whole units, so a small tolerance still
+  // catches it without pinning the test to the solver's last bit.
+  const beadPlace = () => evaluate('[...document.querySelectorAll("#board .bead")].map(e=>{const t=e.getAttribute("transform");return Number(t.slice(t.indexOf(" ")+1,-1))})');
   const barY = rect.y + 134 / 390 * rect.height;
   const barX = vx => rect.x + vx / 600 * rect.width;
   const barDown = vx => send('Input.dispatchMouseEvent', { type: 'mousePressed', x: barX(vx), y: barY, button: 'left', clickCount: 1, buttons: 1 });
@@ -84,7 +88,9 @@ try {
   await barUp(300); await pause(600);
   assert.notEqual(partway, held, 'the beads clear as the finger reaches them, before it lifts');
   assert.equal(await shown(), held, 'a swipe short of the far side springs the beads back');
-  assert.deepEqual(await beadPlace(), placeHeld, 'and every bead lands exactly where it started');
+  const backHome = await beadPlace();
+  const drift = Math.max(...backHome.map((y, i) => Math.abs(y - placeHeld[i])));
+  assert.ok(drift < 0.05, `and every bead lands back where it started (furthest off by ${drift})`);
   await barDown(10);
   for (const vx of [80, 160, 240, 320, 400, 480, 560, 590]) await barMove(vx);
   await barUp(590); await pause(700);

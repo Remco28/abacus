@@ -58,11 +58,19 @@ try {
 // True while a tween owns the bead positions. Every save waits for it to settle,
 // because a half-travelled bead would fail the restore check on the next load and
 // drop the board to empty instead of putting it back. Saves arrive from several
-// places — the frame loop, setOnes, pagehide — so the guard belongs here rather
+// places — setOnes, pagehide, a bead landing — so the guard belongs here rather
 // than at each caller.
 let settling = false;
+// A save that cannot be written yet is remembered rather than dropped, so a
+// change made mid-animation is postponed and never lost. The frame loop flushes
+// it once the board is at rest.
+let dirty = false;
+// Set when something changed the beads outside the animation loop, so a frame
+// with no motion left to draw still redraws them.
+let needsRender = false;
 function save() {
-  if (settling) return;
+  if (settling) { dirty = true; return; }
+  dirty = false;
   try { localStorage.setItem('soroban-v1', JSON.stringify({ ...snapshot(), sound })); } catch { /* The board still works without persistence. */ }
 }
 function unlockSound() {
@@ -134,8 +142,12 @@ function labels() {
   ($('decimal') as HTMLInputElement).value = String(ones);
   $('decimal').setAttribute('aria-valuetext', `Ones at column ${ones + 1} from left; ${COLUMNS - ones - 1} decimal places`);
 }
-function setOnes(i: number) { if (decimalFrozen || i === ones) return; cancelPointers(); ones = i; labels(); render(); save(); status(`Column ${i + 1} is now ones.`); }
+function setOnes(i: number) { if (decimalFrozen || i === ones) return; cancelPointers(); ones = i; labels(); render(); save(); }
 $('decimal').oninput = () => setOnes(Number(($('decimal') as HTMLInputElement).value));
+// The range is only driven directly by keyboard or assistive input — a pointer
+// drag owns its own surface below — so this fires once per press rather than
+// once per pixel, which is what makes it safe to announce from.
+$('decimal').addEventListener('change', () => status(`Column ${ones + 1} is now ones.`));
 // Keep the native range for keyboard/assistive input, but own pointer gestures
 // so a tap on its track or a brush over its thumb can never change the value.
 const decimal = $('decimal') as HTMLInputElement;
@@ -172,7 +184,9 @@ decimalGesture.addEventListener('pointermove', e => {
   decimalTrack.style.setProperty('--caret-left', `${11.111 + ones * 77.778 / (COLUMNS - 1)}%`);
 });
 for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) decimalGesture.addEventListener(type, () => {
-  if (decimalUnlocked) lockDecimal();
+  // Announced on release rather than on every move, so dragging the caret does
+  // not read out each column it passes over.
+  if (decimalUnlocked) { lockDecimal(); status(`Column ${ones + 1} is now ones.`); }
 });
 decimalGesture.addEventListener('click', e => e.preventDefault());
 decimalGesture.addEventListener('contextmenu', e => e.preventDefault());
@@ -326,6 +340,9 @@ function revertColumn(col: number, from: number[]) {
 function setColumn(col: number, to: number[]) {
   for (let slot = 0; slot < 5; slot++) { const bead = beadAt(col, slot); bead.v = 0; bead.y = to[slot]; }
   tweens = tweens.filter(t => t.col !== col);
+  // This runs on the aborts, where there may be no motion left to carry the new
+  // positions to the screen, so ask the next frame to redraw them.
+  needsRender = true;
 }
 function sweepColumn(col: number, delay: number) {
   if (!wipe || wipe.reached.has(col)) return;
@@ -398,20 +415,36 @@ decimalGesture.addEventListener('pointercancel', e => { if (wipe?.id === e.point
 
 function reset(shaken = false) { lockDecimal(); cancelPointers(); clearWipe(); board = createBoard(); render(); save(); clickSound(); status(shaken ? 'Three shakes. Board cleared.' : 'Board cleared.'); }
 $('reset').onclick = () => reset();
-let previous = performance.now(), accumulator = 0, lastSave = previous;
+// True when nothing owns the bead positions: no tween is running, no finger is
+// down, the last tween has settled, and no bead carries velocity. Integrating
+// and redrawing in that state is work for nobody, and on a phone it is the
+// difference between an idle screen and one rewriting thirty beads sixty times a
+// second. `settling` belongs in here: a tween cleared without finishing still
+// has to be settled, or the save it owes would wait for motion that never comes.
+const atRest = () => !settling && !tweens.length && !pointers.size && board.every(c => c.upper.every(b => b.v === 0) && c.lower.every(b => b.v === 0));
+let previous = performance.now(), accumulator = 0, wasResting = true;
 function frame(now: number) {
-  accumulator += Math.min((now - previous) / 1000, .05); previous = now;
-  while (accumulator >= 1 / 120) {
-    for (const c of board) {
-      const impact = Math.max(step(c.upper, UPPER.min, UPPER.max, 1 / 120), step(c.lower, LOWER.min, LOWER.max, 1 / 120));
-      if (impact > 70 && !pointers.size) clickSound(impact);
+  const resting = atRest();
+  if (resting) accumulator = 0;
+  else {
+    accumulator += Math.min((now - previous) / 1000, .05);
+    while (accumulator >= 1 / 120) {
+      for (const c of board) {
+        const impact = Math.max(step(c.upper, UPPER.min, UPPER.max, 1 / 120), step(c.lower, LOWER.min, LOWER.max, 1 / 120));
+        if (impact > 70 && !pointers.size) clickSound(impact);
+      }
+      accumulator -= 1 / 120;
     }
-    accumulator -= 1 / 120;
+    advanceTweens(now);
   }
-  advanceTweens(now);
-  // A wipe in progress is deliberately not saved: a half-swept board must not
-  // outlive a reload. Committing saves once the beads have settled.
-  render(); if (now - lastSave > 1200 && !pointers.size && !wipe && !settling) { save(); lastSave = now; }
+  previous = now;
+  // Where the beads came to rest is worth keeping, so the move from motion to
+  // stillness is itself a save. A wipe in progress is deliberately not saved: a
+  // half-swept board must not outlive a reload.
+  if (!wasResting && resting) dirty = true;
+  wasResting = resting;
+  if (!resting || needsRender) { render(); needsRender = false; }
+  if (dirty && !pointers.size && !wipe && !settling) save();
   requestAnimationFrame(frame);
 }
 document.addEventListener('visibilitychange', () => { if (document.hidden) { endWipe(false, false); cancelPointers(); save(); } });
@@ -727,7 +760,13 @@ const sheetActions = $('sheet-actions');
 // Which rungs a sheet was built from, so changing one gives a sheet to match
 // rather than a stale one — and so opening Settings does not throw away a sheet
 // you are part-way through.
-const configKey = () => `${[...test.ops].sort().join('+')}|${test.levels.move}|${test.levels.mul}`;
+const configKey = () => {
+  const move = test.ops.some((op) => op !== 'mul');
+  const mul = test.ops.includes('mul');
+  // Only the rungs actually in play, so changing a ladder that is switched off
+  // cannot discard a sheet its own settings did not change.
+  return `${[...test.ops].sort().join('+')}|${move ? test.levels.move : ''}|${mul ? test.levels.mul : ''}`;
+};
 const rungNames = () => {
   const names: string[] = [];
   if (test.ops.some((op) => op !== 'mul')) names.push(moveStepLabel(test.levels.move));
