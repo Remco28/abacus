@@ -26,7 +26,7 @@ const text = (selector) => evaluate(`document.querySelector(${JSON.stringify(sel
 const shown = (selector) => evaluate(`!document.querySelector(${JSON.stringify(selector)}).hidden`);
 const click = (selector) => evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);
 const action = (label) => evaluate(`[...document.querySelectorAll("#problem-actions button")].find(b=>b.textContent===${JSON.stringify(label)}).click()`);
-const lines = () => evaluate('[...document.querySelectorAll("#problem-lines div")].map(d=>d.textContent)');
+const lines = () => evaluate('[...document.querySelectorAll("#problem-lines .line")].map(d=>d.textContent)');
 
 try {
   await send('Runtime.enable');
@@ -87,7 +87,7 @@ try {
   assert.match((await lines())[0], /^\d+$/, 'the first line is the multiplicand');
   assert.match((await lines())[1], /^× \d+$/, 'the second line is the multiplier');
   assert.equal(await evaluate('document.querySelectorAll("#problem-lines .rule").length'), 0, 'no answer rule is drawn before there is an answer to write under it');
-  assert.equal(await evaluate('document.querySelectorAll("#problem-lines div").length'), 2, 'and no blank line waits under the last number');
+  assert.equal(await evaluate('document.querySelectorAll("#problem-lines .line").length'), 2, 'and no line waits blank under the last number');
   await click('#close-problem');
   assert.equal(await evaluate('document.querySelector("#problem-dialog").open'), false, 'closing hides the numbers again');
 
@@ -100,15 +100,16 @@ try {
   // Reveal restates the problem and its answer, and the arithmetic has to agree.
   await action('Reveal answer');
   const revealed = await lines();
-  const total = revealed[2]?.match(/^= (\d+)$/);
-  assert.ok(total, `reveal writes the total under the rule: ${JSON.stringify(revealed)}`);
+  const total = (await text('#problem-lines .total')).match(/^= (\d+)$/);
+  assert.ok(total, `reveal writes the total under the rule: ${await text('#problem-lines .total')}`);
+  assert.equal(await evaluate('document.querySelectorAll("#problem-lines .rule").length'), 1, 'the rule arrives with the total');
   assert.equal(Number(revealed[0]) * Number(revealed[1].replace('×', '').trim()), Number(total[1]), 'the stated answer is the product');
   assert.equal(revealed[1].replace('×', '').trim(), first, 'the revealed problem is the one that was asked');
 
   // Next problem clears the verdict and asks a fresh one.
   await action('Next problem');
   assert.equal(await text('#problem-heading'), 'Problem', 'a new problem resets the verdict');
-  const next = await evaluate('[...document.querySelectorAll("#problem-lines div")].map(d=>Number(d.textContent.replace("×","").trim()))');
+  const next = await evaluate('[...document.querySelectorAll("#problem-lines .line")].map(d=>Number(d.textContent.replace("×","").trim()))');
   assert.equal(next.length, 2, 'multiplication asks two operands');
   const answer = next[0] * next[1];
   await click('#close-problem');
@@ -135,8 +136,9 @@ try {
 
   await click('#submit');
   assert.equal(await text('#problem-heading'), 'Correct', 'the answer is accepted');
-  assert.deepEqual(await lines(), [`${next[0]}`, `× ${next[1]}`, `= ${answer}`], 'the verdict writes the total under the rule, once');
-  assert.equal(await shown('#problem-note'), false, 'and leaves no empty line where the prose was');
+  assert.deepEqual(await lines(), [`${next[0]}`, `× ${next[1]}`], 'the verdict leaves the column itself alone');
+  assert.equal(await text('#problem-lines .total'), `= ${answer}`, 'and writes the total once, under the rule');
+  assert.equal(await shown('#problem-note'), false, 'no empty line is left where the prose was');
 
   // The problem and the board both outlive a reload.
   await send('Page.reload');
@@ -145,6 +147,31 @@ try {
   assert.equal(await text('#value'), `${answer}`, 'the board persists');
   await click('#problem');
   assert.deepEqual(await lines(), [`${next[0]}`, `× ${next[1]}`], 'the same problem is still on the desk');
+  await click('#close-problem');
+
+  // Marking your place. Only a column has a middle to lose, so multiplying
+  // never offers it, and the mark outlives a reload along with the problem.
+  await click('#settings');
+  await click('#op-add');
+  await click('#op-mul');
+  await evaluate('const s=document.querySelector("#move-level");s.value="9";s.dispatchEvent(new Event("change"))');
+  await click('#close-settings');
+  await click('#problem');
+  const column = await lines();
+  assert.equal(column.length, 5, 'a five-row column is on the desk');
+  assert.equal(await evaluate('document.querySelectorAll("#problem-lines .line.marked").length'), 0, 'nothing is marked to begin with');
+  assert.equal(await evaluate('document.querySelector("#problem-step").hidden'), true, 'and no place is claimed');
+  await click('#problem-lines .line:nth-child(3)');
+  assert.equal(await text('#problem-lines .line.marked'), column[2], 'the tapped line is the marked one');
+  assert.equal(await text('#problem-step'), 'Line 3 of 5', 'and it is named as a line of the column');
+  await send('Page.reload');
+  await pause(900);
+  await click('#problem');
+  assert.equal(await text('#problem-lines .line.marked'), column[2], 'the mark survives a reload');
+  assert.equal(await text('#problem-step'), 'Line 3 of 5', 'and comes back with its count');
+  await click('#problem-lines .line.marked');
+  assert.equal(await evaluate('document.querySelectorAll("#problem-lines .line.marked").length'), 0, 'tapping the marked line again gives the place up');
+  assert.equal(await evaluate('document.querySelector("#problem-step").hidden'), true, 'and the count goes with it');
   await click('#close-problem');
 
   // Leaving test mode gives the readout and the decimal back.

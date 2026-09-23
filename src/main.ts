@@ -11,16 +11,19 @@ let ones = 3, sound = true;
 // decimal is normalized to the last rod and then frozen, so all six rods carry
 // whole numbers and every answer the generator can ask for fits the board.
 type Verdict = 'none' | 'right' | 'wrong' | 'revealed';
-type TestState = { on: boolean; ops: Operation[]; levels: Levels; problem: Problem | null; onesBefore: number; verdict: Verdict };
-let test: TestState = { on: false, ops: ['add'], levels: { move: 1, mul: 1 }, problem: null, onesBefore: 3, verdict: 'none' };
+// `step` is the line of the problem the learner has marked as their place in
+// it, or -1 for nowhere. It lives here rather than on the Problem because it is
+// where they got to, not something the generator has any business knowing.
+type TestState = { on: boolean; ops: Operation[]; levels: Levels; problem: Problem | null; onesBefore: number; verdict: Verdict; step: number };
+let test: TestState = { on: false, ops: ['add'], levels: { move: 1, mul: 1 }, problem: null, onesBefore: 3, verdict: 'none', step: -1 };
 let decimalFrozen = false;
 let audio: AudioContext | undefined;
 let contactBuffer: AudioBuffer | undefined;
 let lastSound = 0;
 const status = (message: string) => { $('status').textContent = message; };
-type SavedTest = { on: boolean; ops: Operation[]; levels: Levels; problem: Problem | null; onesBefore: number };
+type SavedTest = { on: boolean; ops: Operation[]; levels: Levels; problem: Problem | null; onesBefore: number; step: number };
 type Saved = { positions: number[][]; ones: number; test?: SavedTest };
-const snapshot = (): Saved => ({ positions: board.map(c => [...c.upper, ...c.lower].map(b => b.y)), ones, test: { on: test.on, ops: [...test.ops], levels: { ...test.levels }, problem: test.problem, onesBefore: test.onesBefore } });
+const snapshot = (): Saved => ({ positions: board.map(c => [...c.upper, ...c.lower].map(b => b.y)), ones, test: { on: test.on, ops: [...test.ops], levels: { ...test.levels }, problem: test.problem, onesBefore: test.onesBefore, step: test.step } });
 // A rung number is only trusted if its ladder is that long. A declaration, so
 // the restore below can call it before the selectors are built.
 function rungIn(rung: unknown, count: number): rung is number {
@@ -315,6 +318,7 @@ const problemDialog = $('problem-dialog') as HTMLDialogElement;
 const problemLinesBox = $('problem-lines');
 const problemHeading = $('problem-heading');
 const problemNote = $('problem-note');
+const problemStep = $('problem-step');
 const problemActions = $('problem-actions');
 
 // What the tally shows, trailing zeros and all, and the number behind it for
@@ -332,6 +336,17 @@ function addAction(label: string, primary: boolean, run: () => void) {
   problemActions.appendChild(button);
 }
 
+// Tapping the line you are on marks it, and tapping it again clears the mark,
+// so a mark is never something only some other control can undo. It is saved
+// with the problem, which is the point: a long column outlives one glance.
+function markPlace(row: number) {
+  const rows = problemLines(test.problem!).length;
+  test.step = test.step === row ? -1 : row;
+  renderProblem();
+  save();
+  status(test.step < 0 ? 'Place cleared.' : `Line ${test.step + 1} of ${rows}.`);
+}
+
 function renderProblem() {
   const problem = test.problem;
   problemLinesBox.innerHTML = '';
@@ -341,19 +356,40 @@ function renderProblem() {
   const answered = test.verdict === 'right' || test.verdict === 'revealed';
   // A ten-row column needs smaller type or it will not fit a phone dialog.
   problemLinesBox.className = lines.length > 6 ? 'problem-lines wide' : 'problem-lines';
+  // Keeping your place is only worth anything in a column: two numbers have no
+  // middle to lose, which is why multiplying never offers it.
+  const steppable = lines.length > 2;
   lines.forEach((line, i) => {
-    const row = document.createElement('div');
+    // A button, so the line can be reached and read without a pointer.
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'line';
     row.textContent = line;
-    // The rule is the line you draw before writing a sum down, so it is only
-    // drawn when the total is written under it.
-    if (answered && i === lines.length - 1) row.className = 'rule';
+    if (!steppable) {
+      row.tabIndex = -1;
+    } else {
+      row.classList.add('steppable');
+      row.tabIndex = 0;
+      row.setAttribute('aria-pressed', String(i === test.step));
+      if (i === test.step) row.classList.add('marked');
+      row.onclick = () => markPlace(i);
+    }
     problemLinesBox.appendChild(row);
   });
   if (answered) {
+    // The rule is the line you draw before writing a sum down, so it is only
+    // drawn when the total is written under it. Nothing is written under it the
+    // rest of the time, and a bare rule reads as a fault.
+    const rule = document.createElement('div');
+    rule.className = 'rule';
+    problemLinesBox.appendChild(rule);
     const total = document.createElement('div');
+    total.className = 'total';
     total.textContent = `= ${problem.answer}`;
     problemLinesBox.appendChild(total);
   }
+  problemStep.hidden = !steppable || test.step < 0;
+  problemStep.textContent = problemStep.hidden ? '' : `Line ${test.step + 1} of ${lines.length}`;
   const note = (text: string) => { problemNote.textContent = text; problemNote.hidden = !text; };
   if (test.verdict === 'right') {
     problemHeading.textContent = 'Correct';
@@ -371,7 +407,7 @@ function renderProblem() {
     addAction('Next problem', true, nextProblem);
   } else {
     problemHeading.textContent = 'Problem';
-    note('Read it, then close this and work it out on the beads.');
+    note(`Read it, then close this and work it out on the beads.${steppable ? ' Tap the line you are on to keep your place.' : ''}`);
     addAction('Close', true, () => problemDialog.close());
   }
 }
@@ -379,6 +415,7 @@ function renderProblem() {
 function newProblem() {
   test.problem = generate(test.ops, test.levels);
   test.verdict = 'none';
+  test.step = -1;
   renderProblem();
   save();
 }
@@ -479,6 +516,8 @@ function restoreTest(raw: unknown) {
   }
   if (Number.isInteger(saved.onesBefore) && saved.onesBefore! >= 0 && saved.onesBefore! < COLUMNS) test.onesBefore = saved.onesBefore!;
   if (isProblem(saved.problem)) test.problem = saved.problem;
+  const rows = test.problem?.operands.length ?? 0;
+  if (Number.isInteger(saved.step) && saved.step! >= 0 && saved.step! < rows) test.step = saved.step!;
   if (!saved.on) return;
   test.on = true;
   decimalFrozen = true;
