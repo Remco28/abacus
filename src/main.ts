@@ -288,20 +288,32 @@ let wipe: Wipe | null = null;
 // Slots are 0 for the upper bead and 1..4 for the lower ones, the same order
 // `positions` and `REST` use. The lower beads leave the bar outwards and each
 // travels the same distance, so a staggered column never overlaps in flight.
-function tweenColumn(col: number, delay: number, dur: number, to: number[] = REST) {
-  const now = performance.now();
-  for (let slot = 0; slot < 5; slot++) {
-    const bead = beadAt(col, slot);
-    // A bead already at rest has nothing to do, so it gets no tween. Leaving it
-    // out also keeps it out of the landing ticks below, which is the point:
-    // sweeping a rod that needs no clearing stays quiet instead of clicking at
-    // beads that never moved.
-    if (Math.abs(to[slot] - bead.y) < AT_REST) continue;
-    bead.v = 0;
-    settling = true;
-    tweens = tweens.filter(t => !(t.col === col && t.slot === slot));
-    tweens.push({ col, slot, from: bead.y, to: to[slot], start: now + delay + (slot ? slot * BEAD_STAGGER : 0), dur });
-  }
+function pushTween(col: number, slot: number, to: number, delay: number, dur: number) {
+  const bead = beadAt(col, slot);
+  // Whatever is already queued for this bead goes first: this call is the newest
+  // word on where it is going.
+  tweens = tweens.filter(t => !(t.col === col && t.slot === slot));
+  bead.v = 0;
+  settling = true;
+  tweens.push({ col, slot, from: bead.y, to, start: performance.now() + delay + (slot ? slot * BEAD_STAGGER : 0), dur });
+}
+
+// Sweeping sends a rod's beads to rest. A bead already there has nothing to do,
+// so it gets no tween — which also keeps it out of the landing ticks, so sweeping
+// a rod that needs no clearing stays quiet.
+function tweenColumn(col: number, delay: number, dur: number) {
+  for (let slot = 0; slot < 5; slot++) if (Math.abs(REST[slot] - beadAt(col, slot).y) >= AT_REST) pushTween(col, slot, REST[slot], delay, dur);
+}
+
+// Bringing a rod back is not the mirror of clearing it, and asking where its
+// beads are now is what breaks it. Beads are staggered, so one may not have
+// started when the finger lifts; and a bead still sitting on its resting place
+// can be shoved off it by a neighbour that is still travelling. What has to come
+// back is whatever the sweep was going to move, which is decided by where the
+// beads were when the finger landed. Holding a bead that never moved is the
+// point rather than a waste: the tween is what stops the physics pushing it off.
+function revertColumn(col: number, from: number[]) {
+  for (let slot = 0; slot < 5; slot++) if (Math.abs(REST[slot] - from[slot]) >= AT_REST) pushTween(col, slot, from[slot], 0, REVERT_DUR);
 }
 function setColumn(col: number, to: number[]) {
   for (let slot = 0; slot < 5; slot++) { const bead = beadAt(col, slot); bead.v = 0; bead.y = to[slot]; }
@@ -330,7 +342,7 @@ function endWipe(commit: boolean, animate = true) {
     save(); // Deferred to the settle while the wave is still running.
     status('Board cleared.');
   } else {
-    for (const col of w.reached) { if (instant) setColumn(col, w.from[col]); else tweenColumn(col, 0, REVERT_DUR, w.from[col]); }
+    for (const col of w.reached) { if (instant) setColumn(col, w.from[col]); else revertColumn(col, w.from[col]); }
   }
 }
 function advanceTweens(now: number) {

@@ -66,6 +66,9 @@ try {
   // partway across. Only a full traverse commits: a shorter one springs them
   // back, which is what stops a graze from destroying the number in progress.
   const shown = () => evaluate('document.querySelector("#value").textContent');
+  // Raw bead transforms, which is the only way to see a spring back that lands
+  // close enough to keep the digit but leaves a visible gap in the stack.
+  const beadPlace = () => evaluate('[...document.querySelectorAll("#board .bead")].map(e=>e.getAttribute("transform"))');
   const barY = rect.y + 134 / 390 * rect.height;
   const barX = vx => rect.x + vx / 600 * rect.width;
   const barDown = vx => send('Input.dispatchMouseEvent', { type: 'mousePressed', x: barX(vx), y: barY, button: 'left', clickCount: 1, buttons: 1 });
@@ -74,12 +77,14 @@ try {
   const held = await shown();
   await barDown(300); await barUp(300); await pause(300);
   assert.equal(await shown(), held, 'a tap on the reckoning bar changes nothing');
+  const placeHeld = await beadPlace();
   await barDown(10);
   for (const vx of [60, 120, 180, 240, 300]) await barMove(vx);
   const partway = await shown();
   await barUp(300); await pause(600);
   assert.notEqual(partway, held, 'the beads clear as the finger reaches them, before it lifts');
   assert.equal(await shown(), held, 'a swipe short of the far side springs the beads back');
+  assert.deepEqual(await beadPlace(), placeHeld, 'and every bead lands exactly where it started');
   await barDown(10);
   for (const vx of [80, 160, 240, 320, 400, 480, 560, 590]) await barMove(vx);
   await barUp(590); await pause(700);
@@ -101,14 +106,21 @@ try {
   }
   assert.equal(await evaluate('document.querySelector("#value").textContent'), '0.0', 'three shakes clear board');
   assert.equal(await evaluate('document.querySelector("#motion").getAttribute("aria-pressed")'), 'true', 'motion on only after readings');
-  await evaluate('document.querySelector("#motion").click(); window.originalQuery = navigator.permissions.query.bind(navigator.permissions); navigator.permissions.query = async () => ({state:"denied"}); document.querySelector("#motion").click()');
+  // Refuse sensors through both doors. Chrome now implements requestPermission
+  // as well as permissions.query, and the app asks requestPermission first
+  // because that is the only one iOS offers, so stubbing the other one alone
+  // would let it enable motion and pass this for the wrong reason.
+  await evaluate('document.querySelector("#motion").click(); window.originalQuery = navigator.permissions.query.bind(navigator.permissions); window.originalRequest = DeviceMotionEvent.requestPermission; navigator.permissions.query = async () => ({state:"denied"}); DeviceMotionEvent.requestPermission = async () => "denied"; document.querySelector("#motion").click()');
   await pause(100);
   assert.match(await evaluate('document.querySelector("#motion-status").textContent'), /Brave.*Motion sensors/, 'blocked sensor guidance');
   assert.equal(await evaluate('document.querySelector("#motion").getAttribute("aria-pressed")'), 'false');
-  await evaluate('navigator.permissions.query = window.originalQuery; window.blockMotion = e => e.stopImmediatePropagation(); window.addEventListener("devicemotion", window.blockMotion, true); document.querySelector("#motion").click()');
+  await evaluate('navigator.permissions.query = window.originalQuery; window.originalRequest ? (DeviceMotionEvent.requestPermission = window.originalRequest) : delete DeviceMotionEvent.requestPermission; window.blockMotion = e => e.stopImmediatePropagation(); window.addEventListener("devicemotion", window.blockMotion, true); document.querySelector("#motion").click()');
   await pause(6300);
   assert.match(await evaluate('document.querySelector("#motion-status").textContent'), /blocked or unavailable/, 'no-data timeout');
-  await evaluate('window.removeEventListener("devicemotion", window.blockMotion, true); document.querySelector("#close-settings").click(); document.querySelector("#decimal").focus()');
+  // Opening Settings locks the caret, and a locked caret swallows the arrow keys
+  // on purpose, so the keyboard path has to unlock first — which is what the
+  // help text says and what the lock button is for.
+  await evaluate('window.removeEventListener("devicemotion", window.blockMotion, true); document.querySelector("#close-settings").click(); document.querySelector("#decimal-lock").click(); document.querySelector("#decimal").focus()');
   await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'ArrowRight', code: 'ArrowRight', windowsVirtualKeyCode: 39 });
   await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'ArrowRight', code: 'ArrowRight', windowsVirtualKeyCode: 39 });
   assert.equal(await evaluate('document.querySelector("#decimal").value'), '5', 'keyboard decimal slider');
