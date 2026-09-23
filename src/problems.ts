@@ -8,8 +8,8 @@
 // Difficulty follows the classical soroban order rather than digit count:
 // direct movements, then the 5-complements (Small Friends), then the
 // 10-complements (Big Friends), then a carry onto a rod that needs both
-// (Double Combination), then multi-row drills. Multiplication is the times
-// table plus bookkeeping, so it tiers by operand width on the same levels.
+// (Double Combination), then rows. Each rung below adds exactly one thing to
+// the one before it, because skipping a rung is what strands a learner.
 
 import { COLUMNS } from './model';
 
@@ -22,9 +22,10 @@ export const MULTI_ROW = 10;
 
 export type Operation = 'add' | 'sub' | 'mul';
 export type Move = 'direct' | 'small' | 'big' | 'double';
-export type Level = 1 | 2 | 3 | 4 | 5;
 export type Problem = { op: Operation; operands: number[]; answer: number };
 export type Beads = { up: 0 | 1; low: number };
+/** Which rung of each ladder is selected. Both are 1-based. */
+export type Levels = { move: number; mul: number };
 
 export const SIGN: Record<Operation, string> = { add: '+', sub: '−', mul: '×' };
 
@@ -78,8 +79,8 @@ const digitsOf = (n: number): number[] => {
 /**
  * The moves a whole problem asks for, one per operand digit on the rod it
  * lands on. A carry or borrow travels as part of the move that caused it, so
- * it is not counted twice: on the single-digit levels this is exactly one move
- * per step, which is what the levels constrain.
+ * it is not counted twice: on the single-digit rungs this is exactly one move
+ * per step, which is what those rungs constrain.
  */
 export function movesFor(op: Operation, operands: number[]): Move[] {
   if (op === 'mul' || operands.length < 2) return [];
@@ -120,8 +121,12 @@ export function answerOf(op: Operation, operands: number[]): number {
   return operands[0] * operands[1];
 }
 
-/** The running total after each step, which subtraction must keep at zero or above. */
+/**
+ * The running total after each step. Only adding and taking away have steps, so
+ * multiplication returns nothing rather than the NaN a partial product would be.
+ */
 export function runningTotals(op: Operation, operands: number[]): number[] {
+  if (op === 'mul') return [];
   return operands.map((_, i) => answerOf(op, operands.slice(0, i + 1)));
 }
 
@@ -133,170 +138,138 @@ export function describe(problem: Problem): string {
   return problemLines(problem).join(' ');
 }
 
-const REQUIRED: Record<Level, Move> = { 1: 'direct', 2: 'small', 3: 'big', 4: 'double', 5: 'direct' };
-const ALLOWED: Record<Level, Move[]> = {
-  1: ['direct'],
-  2: ['direct', 'small'],
-  3: ['direct', 'small', 'big'],
-  4: ['direct', 'small', 'big', 'double'],
-  5: ['direct', 'small', 'big', 'double'],
+/** One rung of a ladder: what it teaches, and how wide its problems run. */
+export type Step = {
+  name: string;
+  /** The move every problem on this rung must contain, or null for "anything". */
+  teaches: Move | null;
+  /** Moves allowed anywhere in a problem on this rung. */
+  allows: Move[];
+  /** Operand width in digits, lowest to highest. */
+  width: [number, number];
+  /** How many numbers a problem has, lowest to highest. */
+  rows: [number, number];
 };
 
-// Multiplication is bookkeeping on top of the times table, so each level widens
-// the pair of operands, and it is the multiplier's width that adds partial
-// products. 999 x 999 = 998001 still fits the board, but a three-digit
-// multiplier wants a level of its own and there is none above 2 x 3 yet.
-const MUL_WIDTH: Record<Level, { a: [number, number]; b: [number, number] }> = {
-  1: { a: [2, 9], b: [2, 9] },
-  2: { a: [2, 9], b: [10, 99] },
-  3: { a: [2, 9], b: [100, 999] },
-  4: { a: [10, 99], b: [10, 99] },
-  5: { a: [10, 99], b: [100, 999] },
-};
+const ANY: Move[] = ['direct', 'small', 'big', 'double'];
 
-const LEVEL_NAMES: Record<Level, { move: string; multiply: string }> = {
-  1: { move: 'direct', multiply: '1×1' },
-  2: { move: 'small friends', multiply: '1×2' },
-  3: { move: 'big friends', multiply: '1×3' },
-  4: { move: 'double combination', multiply: '2×2' },
-  5: { move: 'multi-row', multiply: '2×3' },
-};
+// Adding and taking away. Each rung introduces one thing: a wider number on a
+// rung already learned, then a new move, then more rows to hold your place in.
+export const MOVE_STEPS: Step[] = [
+  { name: 'direct, one digit', teaches: 'direct', allows: ['direct'], width: [1, 1], rows: [2, 2] },
+  { name: 'direct, two digits', teaches: 'direct', allows: ['direct'], width: [2, 2], rows: [2, 2] },
+  { name: 'small friends, one digit', teaches: 'small', allows: ['direct', 'small'], width: [1, 1], rows: [2, 3] },
+  { name: 'small friends, two digits', teaches: 'small', allows: ['direct', 'small'], width: [2, 2], rows: [2, 3] },
+  { name: 'big friends, one digit', teaches: 'big', allows: ['direct', 'small', 'big'], width: [1, 1], rows: [2, 3] },
+  { name: 'big friends, two digits', teaches: 'big', allows: ['direct', 'small', 'big'], width: [2, 2], rows: [2, 3] },
+  { name: 'double combination, one digit', teaches: 'double', allows: ANY, width: [1, 1], rows: [2, 3] },
+  { name: 'double combination, two digits', teaches: 'double', allows: ANY, width: [2, 2], rows: [2, 3] },
+  { name: 'mixed moves, five rows', teaches: null, allows: ANY, width: [2, 2], rows: [5, 5] },
+  { name: 'ten rows, one to two digits', teaches: null, allows: ANY, width: [1, 2], rows: [MULTI_ROW, MULTI_ROW] },
+  { name: 'ten rows, up to four digits', teaches: null, allows: ANY, width: [1, 4], rows: [MULTI_ROW, MULTI_ROW] },
+];
 
-export function levelLabel(level: Level): string {
-  return `${level} · ${LEVEL_NAMES[level].move} · ${LEVEL_NAMES[level].multiply}`;
+// Multiplying is bookkeeping on top of the times table, so its ladder is
+// operand width, and the multiplier's width is what adds partial products.
+// 999 x 999 = 998001 is the widest that still fits the six rods.
+export const MUL_STEPS: { name: string; factor: [number, number]; other: [number, number] }[] = [
+  { name: '1 × 1', factor: [2, 9], other: [2, 9] },
+  { name: '1 × 2', factor: [2, 9], other: [10, 99] },
+  { name: '1 × 3', factor: [2, 9], other: [100, 999] },
+  { name: '2 × 2', factor: [10, 99], other: [10, 99] },
+  { name: '2 × 3', factor: [10, 99], other: [100, 999] },
+  { name: '3 × 3', factor: [100, 999], other: [100, 999] },
+];
+
+export const MOVE_STEP_COUNT = MOVE_STEPS.length;
+export const MUL_STEP_COUNT = MUL_STEPS.length;
+
+function stepIndex(step: number, count: number): number {
+  return Math.min(count, Math.max(1, Math.round(step) || 1)) - 1;
 }
 
-export const LEVELS: Level[] = [1, 2, 3, 4, 5];
+// The label names the rung that will actually be generated, so a rung number
+// saved past the end of a ladder reads as the last rung rather than as itself.
+const rungLabel = (step: number, count: number, names: { name: string }[]): string => {
+  const rung = stepIndex(step, count) + 1;
+  return `${rung} · ${names[rung - 1].name}`;
+};
+export const moveStepLabel = (step: number): string => rungLabel(step, MOVE_STEP_COUNT, MOVE_STEPS);
+export const mulStepLabel = (step: number): string => rungLabel(step, MUL_STEP_COUNT, MUL_STEPS);
 
 const randInt = (rand: () => number, min: number, max: number): number => min + Math.floor(rand() * (max - min + 1));
 const pick = <T>(rand: () => number, list: T[]): T => list[Math.min(list.length - 1, Math.floor(rand() * list.length))];
 
-/** Addend options that keep every move inside the level, from a running total. */
-function nextAddends(op: Operation, total: number, allowed: Move[]): number[] {
-  const options: number[] = [];
-  for (let a = 1; a <= 9; a++) {
-    if (op === 'add' && total + a > CAPACITY) continue;
-    if (op === 'sub' && total - a < 0) continue;
-    const move = op === 'add' ? addMove(total % 10, a) : subMove(total % 10, a);
-    if (allowed.includes(move)) options.push(a);
-  }
-  return options;
-}
-
-/** Fill a short drill out to `rows` steps while every move stays in the level. */
-function extend(op: Operation, operands: number[], level: Level, rows: number, rand: () => number): number[] {
-  const allowed = ALLOWED[level];
-  let total = answerOf(op, operands);
-  while (operands.length < rows) {
-    const options = nextAddends(op, total, allowed);
-    if (!options.length) break;
-    const a = pick(rand, options);
-    operands.push(a);
-    total = op === 'add' ? total + a : total - a;
-  }
-  return operands;
-}
-
-// Single-digit drills, opened by the move the level is about. Levels 3 and 4 of
-// subtraction cannot open this way: a borrow on a lone rod would go negative,
-// so those start from a two-digit number and borrow into its tens.
-function singleDigit(op: Operation, level: Level, rand: () => number): number[] {
-  const required = REQUIRED[level];
-  const pairs: Array<[number, number]> = [];
-  for (let d = 1; d <= 9; d++) {
-    for (let second = 1; second <= 9; second++) {
-      if (op === 'add') {
-        if (addMove(d, second) === required) pairs.push([d, second]);
-      } else if (second <= d && subMove(d, second) === required) {
-        pairs.push([d, second]);
-      }
-    }
-  }
-  const [first, second] = pick(rand, pairs);
-  return extend(op, [first, second], level, 3, rand);
-}
-
-function subWithBorrow(level: Level, rand: () => number): number[] {
-  const required = REQUIRED[level];
-  const pairs: Array<[number, number]> = [];
-  for (let tens = 1; tens <= 9; tens++) {
-    for (let ones = 0; ones <= 9; ones++) {
-      for (let s = ones + 1; s <= 9; s++) {
-        if (subMove(ones, s) === required) pairs.push([tens * 10 + ones, s]);
-      }
-    }
-  }
-  const [start, s] = pick(rand, pairs);
-  return extend('sub', [start, s], level, 3, rand);
-}
-
-// The classic exam column: ten numbers, one answer. With six whole-number rods
-// the rows can run to four digits - ten of those still total six figures - and a
-// subtraction is built from its subtrahends so no step passes through zero.
-function multiRow(op: Operation, rand: () => number): number[] {
-  if (op === 'add') {
-    const operands = [randInt(rand, 100, 9999)];
-    let total = operands[0];
-    while (operands.length < MULTI_ROW) {
-      const a = Math.min(randInt(rand, 1, 9999), CAPACITY - total);
-      if (a < 1) break;
-      operands.push(a);
-      total += a;
-    }
-    return operands;
-  }
-  const parts = Array.from({ length: MULTI_ROW - 1 }, () => randInt(rand, 1, 5555));
+/** Operands for one attempt at a rung, before it is checked. */
+function attempt(op: Operation, step: Step, rand: () => number): number[] {
+  const rows = randInt(rand, step.rows[0], step.rows[1]);
+  const digits = randInt(rand, step.width[0], step.width[1]);
+  const lo = 10 ** (digits - 1);
+  const hi = 10 ** digits - 1;
+  if (op === 'add') return Array.from({ length: rows }, () => randInt(rand, lo, hi));
+  // Subtraction is built from its own subtrahends, so the opening number always
+  // covers them and no step passes through zero. That makes it the widest thing
+  // in the column, which is why it is not held to the rung's width.
+  const parts = Array.from({ length: Math.max(1, rows - 1) }, () => randInt(rand, lo, hi));
   const sum = parts.reduce((a, b) => a + b, 0);
-  return [Math.min(CAPACITY, sum + randInt(rand, 1, 9999)), ...parts];
+  return [Math.min(CAPACITY, sum + randInt(rand, 1, hi)), ...parts];
 }
 
-function operandsFor(op: Operation, level: Level, rand: () => number): number[] {
-  if (op === 'mul') {
-    const { a, b } = MUL_WIDTH[level];
-    return [randInt(rand, a[0], a[1]), randInt(rand, b[0], b[1])];
-  }
-  if (level === 5) return multiRow(op, rand);
-  if (op === 'sub' && (level === 3 || level === 4)) return subWithBorrow(level, rand);
-  return singleDigit(op, level, rand);
+/** Whether a problem really belongs on the rung it was generated for. */
+export function fitsStep(op: Operation, operands: number[], step: Step): boolean {
+  const answer = answerOf(op, operands);
+  if (answer <= 0 || answer > CAPACITY) return false;
+  if (op === 'mul') return true; // its width is fixed by construction
+  if (op === 'sub' && runningTotals('sub', operands).some((total) => total < 0)) return false;
+  const moves = movesFor(op, operands);
+  if (!moves.length) return false;
+  if (step.teaches && !moves.includes(step.teaches)) return false;
+  return moves.every((move) => step.allows.includes(move));
 }
 
-// A problem is off the board if its answer leaves the four integer places, if a
-// subtraction passes through a negative running total, or if its moves fall
-// outside the level that was asked for. The multi-row drill is deliberately
-// exempt from the move check: at ten rows every move turns up anyway.
-function beyondBoard(problem: Problem, level: Level): boolean {
-  if (problem.answer < 0 || problem.answer > CAPACITY) return true;
-  if (problem.op === 'sub' && runningTotals('sub', problem.operands).some((t) => t < 0)) return true;
-  if (problem.op === 'mul') return false;
-  if (problem.operands.length >= MULTI_ROW) return false;
-  const moves = movesFor(problem.op, problem.operands);
-  if (!moves.length) return true;
-  return moves.some((move) => !ALLOWED[level].includes(move)) || !moves.includes(REQUIRED[level]);
-}
-
-// Always legal whatever the board holds. Only reached if no attempt satisfies
-// the level, which the builders above are written to make impossible.
-const SIMPLEST: Record<Operation, Problem> = {
-  add: { op: 'add', operands: [2, 3, 1], answer: 6 },
-  sub: { op: 'sub', operands: [9, 4, 5], answer: 0 },
-  mul: { op: 'mul', operands: [2, 3], answer: 6 },
+// Always legal whatever the board holds, one per skill, for the case where no
+// attempt satisfies the rung. The builders above are written to make that
+// impossible; this exists so a failure is a simple problem and not a crash.
+const LAST_RESORT: Record<Operation, Record<string, number[]>> = {
+  add: { direct: [2, 2], small: [4, 3], big: [8, 7], double: [6, 7], mixed: [23, 45, 16] },
+  sub: { direct: [9, 4], small: [6, 2], big: [11, 2], double: [14, 6], mixed: [84, 23, 16] },
+  mul: { mixed: [12, 12] },
 };
 
-export function generate(ops: Operation[], level: Level, rand: () => number = Math.random): Problem {
+function tryProblem(op: Operation, levels: Levels, rand: () => number): Problem | null {
+  if (op === 'mul') {
+    const spec = MUL_STEPS[stepIndex(levels.mul, MUL_STEP_COUNT)];
+    const operands = [randInt(rand, spec.factor[0], spec.factor[1]), randInt(rand, spec.other[0], spec.other[1])];
+    const answer = operands[0] * operands[1];
+    return answer > 0 && answer <= CAPACITY ? { op, operands, answer } : null;
+  }
+  const step = MOVE_STEPS[stepIndex(levels.move, MOVE_STEP_COUNT)];
+  const operands = attempt(op, step, rand);
+  return fitsStep(op, operands, step) ? { op, operands, answer: answerOf(op, operands) } : null;
+}
+
+function lastResort(op: Operation, levels: Levels): Problem {
+  if (op === 'mul') {
+    const spec = MUL_STEPS[stepIndex(levels.mul, MUL_STEP_COUNT)];
+    const operands = [Math.floor((spec.factor[0] + spec.factor[1]) / 2), Math.floor((spec.other[0] + spec.other[1]) / 2)];
+    return { op, operands, answer: operands[0] * operands[1] };
+  }
+  const step = MOVE_STEPS[stepIndex(levels.move, MOVE_STEP_COUNT)];
+  const operands = LAST_RESORT[op][step.teaches ?? 'mixed'];
+  return { op, operands, answer: answerOf(op, operands) };
+}
+
+export function generate(ops: Operation[], levels: Levels, rand: () => number = Math.random): Problem {
   const options = ops.length ? ops : (['add'] as Operation[]);
-  for (let attempt = 0; attempt < 60; attempt++) {
-    const op = pick(rand, options);
-    const operands = operandsFor(op, level, rand);
-    const problem: Problem = { op, operands, answer: answerOf(op, operands) };
-    if (!beyondBoard(problem, level)) return problem;
+  for (let tries = 0; tries < 80; tries++) {
+    const problem = tryProblem(pick(rand, options), levels, rand);
+    if (problem) return problem;
   }
   // Before giving up, walk the same builders without randomness: a constant
   // fake random makes the pick deterministic rather than lucky.
-  for (let seed = 1; seed <= 20; seed++) {
-    const op = options[seed % options.length];
-    const operands = operandsFor(op, level, () => (seed % 11) / 11);
-    const problem: Problem = { op, operands, answer: answerOf(op, operands) };
-    if (!beyondBoard(problem, level)) return problem;
+  for (let seed = 1; seed <= 30; seed++) {
+    const problem = tryProblem(options[seed % options.length], levels, () => (seed % 13) / 13);
+    if (problem) return problem;
   }
-  return SIMPLEST[options[0]];
+  return lastResort(options[0], levels);
 }

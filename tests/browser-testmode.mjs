@@ -49,11 +49,15 @@ try {
 
   // Configure before enabling, which is the order the settings allow.
   await click('#settings');
-  assert.equal(await evaluate('document.querySelector("#level").options.length'), 5, 'five sequenced levels');
-  assert.match(await evaluate('document.querySelector("#level").options[2].textContent'), /big friends/, 'levels are named for the skill they teach');
+  assert.equal(await evaluate('document.querySelector("#move-level").options.length'), 11, 'adding and taking away runs to eleven rungs');
+  assert.match(await evaluate('document.querySelector("#move-level").options[2].textContent'), /small friends, one digit/, 'rungs are named for the move they teach, smallest first');
+  assert.equal(await evaluate('document.querySelector("#mul-level").options.length'), 6, 'multiplying runs to six');
+  assert.equal(await evaluate('document.querySelector("#mul-level-row").hidden'), true, 'the multiplying ladder is out of the way until multiplication is on');
   await click('#op-mul');
   await click('#op-add');
   assert.deepEqual(await evaluate('[...document.querySelectorAll("#op-add,#op-sub,#op-mul")].map(b=>b.getAttribute("aria-pressed"))'), ['false', 'false', 'true'], 'operations select independently');
+  assert.equal(await evaluate('document.querySelector("#mul-level-row").hidden'), false, 'the multiplying ladder appears with multiplication');
+  assert.equal(await evaluate('document.querySelector("#move-level-row").hidden'), true, 'and the adding ladder steps aside');
   await click('#test-mode');
   assert.equal(await text('#test-mode'), 'On', 'test mode reports itself on');
   await click('#close-settings');
@@ -82,6 +86,8 @@ try {
   const first = (await lines())[1].replace('×', '').trim();
   assert.match((await lines())[0], /^\d+$/, 'the first line is the multiplicand');
   assert.match((await lines())[1], /^× \d+$/, 'the second line is the multiplier');
+  assert.equal(await evaluate('document.querySelectorAll("#problem-lines .rule").length'), 0, 'no answer rule is drawn before there is an answer to write under it');
+  assert.equal(await evaluate('document.querySelectorAll("#problem-lines div").length'), 2, 'and no blank line waits under the last number');
   await click('#close-problem');
   assert.equal(await evaluate('document.querySelector("#problem-dialog").open'), false, 'closing hides the numbers again');
 
@@ -93,10 +99,11 @@ try {
 
   // Reveal restates the problem and its answer, and the arithmetic has to agree.
   await action('Reveal answer');
-  const revealed = (await text('#problem-note')).match(/^(\d+) × (\d+) = (\d+)$/);
-  assert.ok(revealed, `reveal restates the problem: ${await text('#problem-note')}`);
-  assert.equal(Number(revealed[1]) * Number(revealed[2]), Number(revealed[3]), 'the stated answer is the product');
-  assert.equal(revealed[2], first, 'the revealed problem is the one that was asked');
+  const revealed = await lines();
+  const total = revealed[2]?.match(/^= (\d+)$/);
+  assert.ok(total, `reveal writes the total under the rule: ${JSON.stringify(revealed)}`);
+  assert.equal(Number(revealed[0]) * Number(revealed[1].replace('×', '').trim()), Number(total[1]), 'the stated answer is the product');
+  assert.equal(revealed[1].replace('×', '').trim(), first, 'the revealed problem is the one that was asked');
 
   // Next problem clears the verdict and asks a fresh one.
   await action('Next problem');
@@ -128,7 +135,8 @@ try {
 
   await click('#submit');
   assert.equal(await text('#problem-heading'), 'Correct', 'the answer is accepted');
-  assert.equal(await text('#problem-note'), `${next[0]} × ${next[1]} = ${answer}`, 'the verdict restates the sum');
+  assert.deepEqual(await lines(), [`${next[0]}`, `× ${next[1]}`, `= ${answer}`], 'the verdict writes the total under the rule, once');
+  assert.equal(await shown('#problem-note'), false, 'and leaves no empty line where the prose was');
 
   // The problem and the board both outlive a reload.
   await send('Page.reload');

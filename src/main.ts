@@ -1,6 +1,6 @@
 import './style.css';
 import { COLUMNS, SIZE, UPPER, LOWER, createBoard, digit, formatValue, placeName, moveBead, step, ShakeDetector } from './model';
-import { CAPACITY, LEVELS, TEST_ONES, describe as describeProblem, generate, levelLabel, problemLines, type Level, type Operation, type Problem } from './problems';
+import { CAPACITY, MOVE_STEP_COUNT, MUL_STEP_COUNT, TEST_ONES, describe as describeProblem, generate, moveStepLabel, mulStepLabel, problemLines, type Levels, type Operation, type Problem } from './problems';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const svg = document.getElementById('board') as unknown as SVGSVGElement;
@@ -8,19 +8,24 @@ svg.setAttribute('preserveAspectRatio', 'none');
 let board = createBoard();
 let ones = 3, sound = true;
 // Test mode. The problem is read in a dialog and solved on the beads; the
-// decimal is normalized and then frozen, so every answer the generator can ask
-// for fits the four whole-number places it leaves.
+// decimal is normalized to the last rod and then frozen, so all six rods carry
+// whole numbers and every answer the generator can ask for fits the board.
 type Verdict = 'none' | 'right' | 'wrong' | 'revealed';
-type TestState = { on: boolean; ops: Operation[]; level: Level; problem: Problem | null; onesBefore: number; verdict: Verdict };
-let test: TestState = { on: false, ops: ['add'], level: 1, problem: null, onesBefore: 3, verdict: 'none' };
+type TestState = { on: boolean; ops: Operation[]; levels: Levels; problem: Problem | null; onesBefore: number; verdict: Verdict };
+let test: TestState = { on: false, ops: ['add'], levels: { move: 1, mul: 1 }, problem: null, onesBefore: 3, verdict: 'none' };
 let decimalFrozen = false;
 let audio: AudioContext | undefined;
 let contactBuffer: AudioBuffer | undefined;
 let lastSound = 0;
 const status = (message: string) => { $('status').textContent = message; };
-type SavedTest = { on: boolean; ops: Operation[]; level: Level; problem: Problem | null; onesBefore: number };
+type SavedTest = { on: boolean; ops: Operation[]; levels: Levels; problem: Problem | null; onesBefore: number };
 type Saved = { positions: number[][]; ones: number; test?: SavedTest };
-const snapshot = (): Saved => ({ positions: board.map(c => [...c.upper, ...c.lower].map(b => b.y)), ones, test: { on: test.on, ops: [...test.ops], level: test.level, problem: test.problem, onesBefore: test.onesBefore } });
+const snapshot = (): Saved => ({ positions: board.map(c => [...c.upper, ...c.lower].map(b => b.y)), ones, test: { on: test.on, ops: [...test.ops], levels: { ...test.levels }, problem: test.problem, onesBefore: test.onesBefore } });
+// A rung number is only trusted if its ladder is that long. A declaration, so
+// the restore below can call it before the selectors are built.
+function rungIn(rung: unknown, count: number): rung is number {
+  return Number.isInteger(rung) && (rung as number) >= 1 && (rung as number) <= count;
+}
 function restore(saved: Saved) {
   board = createBoard();
   if (!Number.isInteger(saved.ones) || saved.ones < 0 || saved.ones >= COLUMNS || saved.positions?.length !== COLUMNS) return;
@@ -333,45 +338,56 @@ function renderProblem() {
   problemActions.innerHTML = '';
   if (!problem) return;
   const lines = problemLines(problem);
+  const answered = test.verdict === 'right' || test.verdict === 'revealed';
   // A ten-row column needs smaller type or it will not fit a phone dialog.
   problemLinesBox.className = lines.length > 6 ? 'problem-lines wide' : 'problem-lines';
   lines.forEach((line, i) => {
     const row = document.createElement('div');
     row.textContent = line;
-    if (i && i === lines.length - 1) row.className = 'rule';
+    // The rule is the line you draw before writing a sum down, so it is only
+    // drawn when the total is written under it.
+    if (answered && i === lines.length - 1) row.className = 'rule';
     problemLinesBox.appendChild(row);
   });
+  if (answered) {
+    const total = document.createElement('div');
+    total.textContent = `= ${problem.answer}`;
+    problemLinesBox.appendChild(total);
+  }
+  const note = (text: string) => { problemNote.textContent = text; problemNote.hidden = !text; };
   if (test.verdict === 'right') {
     problemHeading.textContent = 'Correct';
-    problemNote.textContent = `${describeProblem(problem)} = ${problem.answer}`;
+    note('');
     addAction('Next problem', true, nextProblem);
   } else if (test.verdict === 'wrong') {
     problemHeading.textContent = 'Not quite';
-    problemNote.textContent = `Your board shows ${boardValue()}.`;
+    note(`Your board shows ${boardValue()}.`);
     addAction('Clear board', false, () => { problemDialog.close(); reset(); status('Board cleared. Same problem. Submit when it is right.'); });
     addAction('Keep board', false, () => { problemDialog.close(); status('Board kept. Adjust it and submit again.'); });
     addAction('Reveal answer', false, revealAnswer);
   } else if (test.verdict === 'revealed') {
     problemHeading.textContent = 'Answer';
-    problemNote.textContent = `${describeProblem(problem)} = ${problem.answer}`;
+    note('');
     addAction('Next problem', true, nextProblem);
   } else {
     problemHeading.textContent = 'Problem';
-    problemNote.textContent = 'Read it, then close this and work it out on the beads.';
+    note('Read it, then close this and work it out on the beads.');
     addAction('Close', true, () => problemDialog.close());
   }
 }
 
 function newProblem() {
-  test.problem = generate(test.ops, test.level);
+  test.problem = generate(test.ops, test.levels);
   test.verdict = 'none';
   renderProblem();
   save();
 }
 
 function showProblem() {
-  if (!test.problem) test.problem = generate(test.ops, test.level);
-  test.verdict = 'none';
+  if (!test.problem) test.problem = generate(test.ops, test.levels);
+  // Re-reading after a wrong answer keeps the Clear / Keep / Reveal choices,
+  // so a second look cannot take the ways out away.
+  if (test.verdict !== 'wrong') test.verdict = 'none';
   renderProblem();
   if (!problemDialog.open) problemDialog.showModal();
   status(`Problem: ${describeProblem(test.problem)}`);
@@ -405,14 +421,14 @@ function setTestMode(on: boolean) {
   test.on = on;
   if (on) {
     test.onesBefore = ones;
-    // Normalize first, then freeze. Every test then has the same four
-    // whole-number places, so a level means the same thing for everyone.
+    // Normalize first, then freeze. Every test then has all six rods carrying
+    // whole numbers, so a rung means the same thing for everyone.
     decimalFrozen = false;
     setOnes(TEST_ONES);
     decimalFrozen = true;
     lockDecimal();
     test.verdict = 'none';
-    if (!test.problem) test.problem = generate(test.ops, test.level);
+    if (!test.problem) test.problem = generate(test.ops, test.levels);
   } else {
     decimalFrozen = false;
     if (problemDialog.open) problemDialog.close();
@@ -433,8 +449,15 @@ function applyTestUi() {
   for (const [id, op] of [['op-add', 'add'], ['op-sub', 'sub'], ['op-mul', 'mul']] as Array<[string, Operation]>) {
     $(id).setAttribute('aria-pressed', String(test.ops.includes(op)));
   }
-  const select = $('level') as HTMLSelectElement;
-  if (select.options.length) select.value = String(test.level);
+  // Before the rungs are filled there is nothing to select, which is why the
+  // value is set only when the options exist.
+  const moveSelect = $('move-level') as HTMLSelectElement;
+  const mulSelect = $('mul-level') as HTMLSelectElement;
+  if (moveSelect.options.length) moveSelect.value = String(test.levels.move);
+  if (mulSelect.options.length) mulSelect.value = String(test.levels.mul);
+  // Only the ladders actually in play are on offer.
+  ($('move-level-row') as HTMLElement).hidden = !test.ops.some((op) => op !== 'mul');
+  ($('mul-level-row') as HTMLElement).hidden = !test.ops.includes('mul');
 }
 
 function isProblem(value: unknown): value is Problem {
@@ -449,25 +472,38 @@ function restoreTest(raw: unknown) {
   const saved = raw as Partial<SavedTest>;
   const ops = Array.isArray(saved.ops) ? saved.ops.filter((op): op is Operation => op === 'add' || op === 'sub' || op === 'mul') : [];
   if (ops.length) test.ops = ops;
-  if (saved.level && LEVELS.includes(saved.level)) test.level = saved.level;
+  const rungs = saved.levels;
+  if (rungs) {
+    if (rungIn(rungs.move, MOVE_STEP_COUNT)) test.levels.move = rungs.move;
+    if (rungIn(rungs.mul, MUL_STEP_COUNT)) test.levels.mul = rungs.mul;
+  }
   if (Number.isInteger(saved.onesBefore) && saved.onesBefore! >= 0 && saved.onesBefore! < COLUMNS) test.onesBefore = saved.onesBefore!;
   if (isProblem(saved.problem)) test.problem = saved.problem;
   if (!saved.on) return;
   test.on = true;
   decimalFrozen = true;
   ones = TEST_ONES;
-  if (!test.problem) test.problem = generate(test.ops, test.level);
+  if (!test.problem) test.problem = generate(test.ops, test.levels);
   applyTestUi();
 }
 
-const levelSelect = $('level') as HTMLSelectElement;
-for (const level of LEVELS) {
-  const option = document.createElement('option');
-  option.value = String(level);
-  option.textContent = levelLabel(level);
-  levelSelect.appendChild(option);
+// Two ladders, because one is not a scale: adding and taking away is graded by
+// the bead movement a step needs, and multiplying by the width of its operands.
+function fillRungs(id: string, count: number, label: (rung: number) => string): HTMLSelectElement {
+  const select = $(id) as HTMLSelectElement;
+  for (let rung = 1; rung <= count; rung++) {
+    const option = document.createElement('option');
+    option.value = String(rung);
+    option.textContent = label(rung);
+    select.appendChild(option);
+  }
+  select.value = '1';
+  return select;
 }
-levelSelect.onchange = () => { test.level = Number(levelSelect.value) as Level; if (test.on) newProblem(); save(); };
+const moveLevel = fillRungs('move-level', MOVE_STEP_COUNT, moveStepLabel);
+const mulLevel = fillRungs('mul-level', MUL_STEP_COUNT, mulStepLabel);
+moveLevel.onchange = () => { test.levels.move = Number(moveLevel.value); if (test.on) newProblem(); save(); };
+mulLevel.onchange = () => { test.levels.mul = Number(mulLevel.value); if (test.on) newProblem(); save(); };
 ($('test-mode') as HTMLButtonElement).onclick = () => setTestMode(!test.on);
 for (const [id, op] of [['op-add', 'add'], ['op-sub', 'sub'], ['op-mul', 'mul']] as Array<[string, Operation]>) {
   ($(id) as HTMLButtonElement).onclick = () => {
