@@ -23,7 +23,10 @@ let lastSound = 0;
 const status = (message: string) => { $('status').textContent = message; };
 type SavedTest = { on: boolean; ops: Operation[]; levels: Levels; problem: Problem | null; onesBefore: number; step: number };
 type Saved = { positions: number[][]; ones: number; test?: SavedTest };
-const snapshot = (): Saved => ({ positions: board.map(c => [...c.upper, ...c.lower].map(b => b.y)), ones, test: { on: test.on, ops: [...test.ops], levels: { ...test.levels }, problem: test.problem, onesBefore: test.onesBefore, step: test.step } });
+// One y per rod, upper bead first and then the four lower ones. A wipe remembers
+// the same shape, which is how it puts every bead back where it found it.
+const positions = () => board.map(c => [...c.upper, ...c.lower].map(b => b.y));
+const snapshot = (): Saved => ({ positions: positions(), ones, test: { on: test.on, ops: [...test.ops], levels: { ...test.levels }, problem: test.problem, onesBefore: test.onesBefore, step: test.step } });
 // A rung number is only trusted if its ladder is that long. A declaration, so
 // the restore below can call it before the selectors are built.
 function rungIn(rung: unknown, count: number): rung is number {
@@ -44,7 +47,14 @@ try {
   const saved = JSON.parse(localStorage.getItem('soroban-v1') || 'null');
   if (saved) { restore(saved); sound = saved.sound !== false; restoreTest(saved.test); }
 } catch { /* Storage can be unavailable in private browsing. */ }
+// True while a tween owns the bead positions. Every save waits for it to settle,
+// because a half-travelled bead would fail the restore check on the next load and
+// drop the board to empty instead of putting it back. Saves arrive from several
+// places — the frame loop, setOnes, pagehide — so the guard belongs here rather
+// than at each caller.
+let settling = false;
 function save() {
+  if (settling) return;
   try { localStorage.setItem('soroban-v1', JSON.stringify({ ...snapshot(), sound })); } catch { /* The board still works without persistence. */ }
 }
 function unlockSound() {
@@ -250,7 +260,118 @@ function endPointer(e: PointerEvent) {
 svg.addEventListener('pointerup', endPointer);
 svg.addEventListener('pointercancel', endPointer);
 svg.addEventListener('lostpointercapture', endPointer);
-function reset(shaken = false) { lockDecimal(); cancelPointers(); board = createBoard(); render(); save(); clickSound(); status(shaken ? 'Three shakes. Board cleared.' : 'Board cleared.'); }
+
+// --- The reckoning bar ------------------------------------------------------
+// A real soroban is cleared by running a finger along the reckoning bar, pushing
+// every bead away from it, and the same swipe works here. That strip is the one
+// the decimal-caret surface already covers, and the caret only owns it while it
+// is unlocked — the default, and always in test mode — so a locked caret leaves
+// the whole bar to the wipe and the two gestures cannot be mistaken for each
+// other.
+//
+// The wave follows the finger instead of waiting for the swipe to finish, so
+// there is no delay to feel. Completion is what is gated: lift the finger before
+// every column has been swept and the beads spring back, which makes a stray
+// graze self-healing rather than destructive.
+const REST = (() => { const first = createBoard()[0]; return [...first.upper, ...first.lower].map(b => b.y); })();
+const beadAt = (col: number, slot: number) => slot === 0 ? board[col].upper[0] : board[col].lower[slot - 1];
+const coordsX = (e: PointerEvent) => { const rect = svg.getBoundingClientRect(); return (e.clientX - rect.left) * 600 / rect.width; };
+const columnAtX = (x: number) => Math.max(0, Math.min(COLUMNS - 1, Math.floor((x - 20) / (560 / COLUMNS))));
+const easeOut = (t: number) => 1 - (1 - t) ** 3;
+
+const WIPE_DUR = 180, REVERT_DUR = 140, BEAD_STAGGER = 12, COLUMN_STAGGER = 45, ARM_DISTANCE = 8;
+type Tween = { col: number; slot: number; from: number; to: number; start: number; dur: number };
+type Wipe = { id: number; from: number[][]; reached: Set<number>; last: number; startX: number; startY: number; armed: boolean };
+let tweens: Tween[] = [];
+let wipe: Wipe | null = null;
+
+// Slots are 0 for the upper bead and 1..4 for the lower ones, the same order
+// `positions` and `REST` use. The lower beads leave the bar outwards and each
+// travels the same distance, so a staggered column never overlaps in flight.
+function tweenColumn(col: number, delay: number, dur: number, to: number[] = REST) {
+  const now = performance.now();
+  settling = true;
+  for (let slot = 0; slot < 5; slot++) {
+    const bead = beadAt(col, slot);
+    bead.v = 0;
+    tweens = tweens.filter(t => !(t.col === col && t.slot === slot));
+    tweens.push({ col, slot, from: bead.y, to: to[slot], start: now + delay + (slot ? slot * BEAD_STAGGER : 0), dur });
+  }
+}
+function setColumn(col: number, to: number[]) {
+  for (let slot = 0; slot < 5; slot++) { const bead = beadAt(col, slot); bead.v = 0; bead.y = to[slot]; }
+  tweens = tweens.filter(t => t.col !== col);
+}
+function sweepColumn(col: number, delay: number) {
+  if (!wipe || wipe.reached.has(col)) return;
+  wipe.reached.add(col);
+  tweenColumn(col, delay, WIPE_DUR);
+}
+function clearWipe() { wipe = null; tweens = []; settling = false; }
+function endWipe(commit: boolean, animate = true) {
+  if (!wipe) return;
+  const w = wipe; wipe = null;
+  if (!w.armed) return; // A tap, or a drag that never clearly went sideways.
+  // `instant` is for the aborts: a blur or a backgrounded tab can hide the
+  // screen mid-gesture, so there would be nobody watching the spring back.
+  const instant = !animate;
+  if (commit && w.reached.size === COLUMNS) {
+    // The columns the finger never reached finish the wave, staggered by how far
+    // they are from where it stopped.
+    for (let col = 0; col < COLUMNS; col++) {
+      if (w.reached.has(col)) continue;
+      if (instant) setColumn(col, REST); else tweenColumn(col, Math.abs(col - w.last) * COLUMN_STAGGER, WIPE_DUR);
+    }
+    save(); // Deferred to the settle while the wave is still running.
+    status('Board cleared.');
+  } else {
+    for (const col of w.reached) { if (instant) setColumn(col, w.from[col]); else tweenColumn(col, 0, REVERT_DUR, w.from[col]); }
+  }
+}
+function advanceTweens(now: number) {
+  if (!tweens.length) {
+    if (settling) { settling = false; save(); }
+    return;
+  }
+  for (const t of tweens) {
+    const bead = beadAt(t.col, t.slot);
+    bead.v = 0;
+    bead.y = now <= t.start ? t.from : t.from + (t.to - t.from) * easeOut(Math.min(1, (now - t.start) / t.dur));
+  }
+  const done = tweens.filter(t => now > t.start + t.dur);
+  if (!done.length) return;
+  tweens = tweens.filter(t => now <= t.start + t.dur);
+  // One tick per column as it lands, rather than one per bead.
+  for (const col of new Set(done.map(t => t.col))) if (!tweens.some(t => t.col === col)) clickSound(140);
+  if (!tweens.length && settling) { settling = false; save(); }
+}
+
+// One finger owns the bar at a time, and the caret has first claim on it while
+// it is unlocked.
+decimalGesture.addEventListener('pointerdown', e => {
+  if (decimalUnlocked || e.button !== 0 || pointers.size || wipe) return;
+  const x = coordsX(e), y = coords(e);
+  wipe = { id: e.pointerId, from: positions(), reached: new Set(), last: columnAtX(x), startX: x, startY: y, armed: false };
+  decimalGesture.setPointerCapture(e.pointerId);
+});
+decimalGesture.addEventListener('pointermove', e => {
+  if (!wipe || wipe.id !== e.pointerId) return;
+  const x = coordsX(e);
+  if (!wipe.armed) {
+    // Sideways intent, so a tap or a stray vertical drag on the bar never wipes.
+    const dx = Math.abs(x - wipe.startX);
+    if (dx < ARM_DISTANCE || dx <= Math.abs(coords(e) - wipe.startY)) return;
+    wipe.armed = true;
+    sweepColumn(wipe.last, 0);
+  }
+  const col = columnAtX(x), lo = Math.min(wipe.last, col), hi = Math.max(wipe.last, col);
+  for (let c = lo; c <= hi; c++) sweepColumn(c, 0);
+  wipe.last = col;
+});
+decimalGesture.addEventListener('pointerup', e => { if (wipe?.id === e.pointerId) endWipe(true); });
+decimalGesture.addEventListener('pointercancel', e => { if (wipe?.id === e.pointerId) endWipe(false, false); });
+
+function reset(shaken = false) { lockDecimal(); cancelPointers(); clearWipe(); board = createBoard(); render(); save(); clickSound(); status(shaken ? 'Three shakes. Board cleared.' : 'Board cleared.'); }
 $('reset').onclick = () => reset();
 let previous = performance.now(), accumulator = 0, lastSave = previous;
 function frame(now: number) {
@@ -262,12 +383,15 @@ function frame(now: number) {
     }
     accumulator -= 1 / 120;
   }
-  render(); if (now - lastSave > 1200 && !pointers.size) { save(); lastSave = now; }
+  advanceTweens(now);
+  // A wipe in progress is deliberately not saved: a half-swept board must not
+  // outlive a reload. Committing saves once the beads have settled.
+  render(); if (now - lastSave > 1200 && !pointers.size && !wipe && !settling) { save(); lastSave = now; }
   requestAnimationFrame(frame);
 }
-document.addEventListener('visibilitychange', () => { if (document.hidden) { cancelPointers(); save(); } });
+document.addEventListener('visibilitychange', () => { if (document.hidden) { endWipe(false, false); cancelPointers(); save(); } });
 window.addEventListener('pagehide', save);
-window.addEventListener('blur', cancelPointers);
+window.addEventListener('blur', () => { cancelPointers(); endWipe(false, false); });
 
 let motionEnabled = false, motionReceived = false, motionTimer: ReturnType<typeof setTimeout> | undefined;
 let detector = new ShakeDetector();
@@ -561,7 +685,7 @@ applyTestUi();
 
 const settings = $('settings-dialog') as HTMLDialogElement;
 const welcome = $('welcome-dialog') as HTMLDialogElement;
-$('settings').onclick = () => { lockDecimal(); cancelPointers(); settings.showModal(); };
+$('settings').onclick = () => { lockDecimal(); cancelPointers(); endWipe(false, false); settings.showModal(); };
 $('close-settings').onclick = () => settings.close();
 $('show-welcome').onclick = () => { settings.close(); welcome.showModal(); };
 $('start').onclick = () => welcome.close();

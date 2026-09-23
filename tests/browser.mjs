@@ -61,6 +61,36 @@ try {
   await send('Page.reload'); await pause(700);
   assert.equal(await evaluate('document.querySelector("#value").textContent'), '540.0', 'persistence');
   assert.equal(await evaluate('document.querySelector("#welcome-dialog").open'), false, 'welcome stays dismissed');
+  // The reckoning bar. A swipe clears the board, and the wave follows the finger
+  // rather than waiting for it to arrive, so the beads must already be cleared
+  // partway across. Only a full traverse commits: a shorter one springs them
+  // back, which is what stops a graze from destroying the number in progress.
+  const shown = () => evaluate('document.querySelector("#value").textContent');
+  const barY = rect.y + 134 / 390 * rect.height;
+  const barX = vx => rect.x + vx / 600 * rect.width;
+  const barDown = vx => send('Input.dispatchMouseEvent', { type: 'mousePressed', x: barX(vx), y: barY, button: 'left', clickCount: 1, buttons: 1 });
+  const barMove = async vx => { await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: barX(vx), y: barY, button: 'left', buttons: 1 }); await pause(20); };
+  const barUp = vx => send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: barX(vx), y: barY, button: 'left', clickCount: 1, buttons: 0 });
+  const held = await shown();
+  await barDown(300); await barUp(300); await pause(300);
+  assert.equal(await shown(), held, 'a tap on the reckoning bar changes nothing');
+  await barDown(10);
+  for (const vx of [60, 120, 180, 240, 300]) await barMove(vx);
+  const partway = await shown();
+  await barUp(300); await pause(600);
+  assert.notEqual(partway, held, 'the beads clear as the finger reaches them, before it lifts');
+  assert.equal(await shown(), held, 'a swipe short of the far side springs the beads back');
+  await barDown(10);
+  for (const vx of [80, 160, 240, 320, 400, 480, 560, 590]) await barMove(vx);
+  await barUp(590); await pause(700);
+  const wiped = await shown();
+  assert.notEqual(wiped, held, 'a full traverse clears the board');
+  // Leave a number on the beads: the motion checks below assert the shakes clear
+  // the board, which only means something if there is something to clear.
+  await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [point(0, 28, 9)] });
+  await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await pause(300);
+  assert.notEqual(await shown(), wiped, 'a tap on a bead still counts it after a wipe');
   await send('Browser.grantPermissions', { origin: await evaluate('location.origin'), permissions: ['sensors'] });
   await evaluate('document.querySelector("#settings").click(); document.querySelector("#motion").click()');
   await pause(100);
