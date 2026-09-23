@@ -45,7 +45,7 @@ try {
     await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'ArrowRight', code: 'ArrowRight', windowsVirtualKeyCode: 39 });
   }
   assert.equal(await evaluate('document.querySelector("#decimal").value'), '4', 'free play can move the decimal');
-  assert.equal(await text('#value'), '0.0', 'five one place groups in free play');
+  assert.equal(await text('#value'), '0.0', 'the tally follows the decimal in free play');
 
   // Configure before enabling, which is the order the settings allow.
   await click('#settings');
@@ -62,18 +62,19 @@ try {
   assert.equal(await shown('#submit'), true, 'the Submit control appears');
   assert.equal(await shown('#decimal-lock'), false, 'the lock button leaves the readout row while testing');
   assert.equal(await shown('#value'), true, 'the tally stays visible, as in free play');
-  assert.equal(await text('#value'), '0.00', 'test mode normalizes the decimal to four whole-number places');
+  assert.equal(await text('#value'), '0', 'test mode spends no rod on fractions');
 
   // The row has to hold Problem, Submit, Clear and Settings on a phone.
   const box = await evaluate('(()=>{const c=document.querySelector(".controls").getBoundingClientRect();const i=document.querySelector("#value").getBoundingClientRect();return {controlsRight:c.right,valueRight:i.right,inner:innerWidth}})()');
   assert.ok(box.controlsRight <= box.inner && box.valueRight <= box.controlsRight, `test-mode readout row stays on screen: ${JSON.stringify(box)}`);
 
-  // Try to move the decimal while testing; the board's formatting must not budge.
-  await evaluate('const d=document.querySelector("#decimal");d.value="5";d.dispatchEvent(new Event("input"));document.querySelector("#decimal").focus()');
+  // Try to move the decimal while testing. Aim at a position that would show
+  // decimals, or the check would pass even with the freeze broken.
+  await evaluate('const d=document.querySelector("#decimal");d.value="3";d.dispatchEvent(new Event("input"));document.querySelector("#decimal").focus()');
   await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'ArrowRight', code: 'ArrowRight', windowsVirtualKeyCode: 39 });
   await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'ArrowRight', code: 'ArrowRight', windowsVirtualKeyCode: 39 });
   await pause(80);
-  assert.equal(await text('#value'), '0.00', 'the decimal stays where test mode put it');
+  assert.equal(await text('#value'), '0', 'the decimal stays where test mode put it');
 
   // Read the problem, then close it to solve.
   await click('#problem');
@@ -87,7 +88,7 @@ try {
   // An empty board is wrong, and a wrong answer offers all three ways out.
   await click('#submit');
   assert.equal(await text('#problem-heading'), 'Not quite', 'an empty board is not the answer');
-  assert.equal(await text('#problem-note'), 'Your board shows 0.00.', 'the verdict quotes the board');
+  assert.equal(await text('#problem-note'), 'Your board shows 0.', 'the verdict quotes the board');
   assert.deepEqual(await evaluate('[...document.querySelectorAll("#problem-actions button")].map(b=>b.textContent)'), ['Clear board', 'Keep board', 'Reveal answer'], 'a wrong answer offers all three ways out');
 
   // Reveal restates the problem and its answer, and the arithmetic has to agree.
@@ -114,15 +115,16 @@ try {
     await pause(90);
   };
   let tapId = 1;
-  for (let k = 0; k < 4; k++) {
+  // While testing the ones column is the last rod, so place 10^k at 5 - k.
+  for (let k = 0; k < 6; k++) {
     const digit = Math.floor(answer / 10 ** k) % 10;
-    const col = 3 - k;
+    const col = 5 - k;
     if (!digit) continue;
     if (digit >= 5) await tap(col, 28, tapId++);
     const rest = digit % 5;
     if (rest) await tap(col, 246 + (rest - 1) * 36, tapId++);
   }
-  assert.equal(await text('#value'), `${answer}.00`, 'the board holds the answer');
+  assert.equal(await text('#value'), `${answer}`, 'the board holds the answer');
 
   await click('#submit');
   assert.equal(await text('#problem-heading'), 'Correct', 'the answer is accepted');
@@ -132,7 +134,7 @@ try {
   await send('Page.reload');
   await pause(900);
   assert.equal(await shown('#problem'), true, 'test mode persists');
-  assert.equal(await text('#value'), `${answer}.00`, 'the board persists');
+  assert.equal(await text('#value'), `${answer}`, 'the board persists');
   await click('#problem');
   assert.deepEqual(await lines(), [`${next[0]}`, `× ${next[1]}`], 'the same problem is still on the desk');
   await click('#close-problem');
@@ -146,9 +148,9 @@ try {
   assert.equal(await shown('#problem'), false, 'leaving test mode takes the controls away');
   assert.equal(await shown('#decimal-lock'), true, 'and gives the decimal lock back');
   assert.equal(await evaluate('document.querySelector("#decimal").value'), '4', 'the decimal is back where it was');
-  // The same beads read by different place values, and the freeze is lifted.
-  await evaluate('const d=document.querySelector("#decimal");d.value="3";d.dispatchEvent(new Event("input"))');
-  assert.equal(await text('#value'), `${answer}.00`, 'the decimal moves again outside test mode');
+  // The same beads read by a different place value, and the freeze is lifted.
+  await evaluate('const d=document.querySelector("#decimal");d.value="5";d.dispatchEvent(new Event("input"))');
+  assert.equal(await text('#value'), `${answer}`, 'the decimal moves again outside test mode');
 
   assert.deepEqual(errors, [], `no browser exceptions: ${JSON.stringify(errors[0] ?? null)}`);
   console.log('PASS: test mode normalizes and holds the decimal, reads the problem in a dialog, judges clear/keep/reveal, accepts and rejects answers, restores the decimal, and persists.');

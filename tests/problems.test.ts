@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   addMove, subMove, movesFor, answerOf, runningTotals, generate, problemLines, describe, levelLabel,
-  CAPACITY, MULTI_ROW, LEVELS, SIGN, type Level, type Move, type Operation, type Problem,
+  CAPACITY, MULTI_ROW, LEVELS, SIGN, TEST_ONES, type Level, type Move, type Operation, type Problem,
 } from '../src/problems';
 
 // A small deterministic generator, so a failing case can be reproduced by seed.
@@ -94,7 +94,7 @@ test('multiplication tiers by operand width and stays inside the board', () => {
       if (level === 2) assert.deepEqual([a, b], [1, 2]);
       if (level === 3) assert.deepEqual([a, b], [1, 3]);
       if (level === 4) assert.deepEqual([a, b], [2, 2]);
-      if (level === 5) assert.ok(problem.operands.every((n) => n >= 20), describe(problem));
+      if (level === 5) assert.deepEqual([a, b], [2, 3]);
     }
   }
 });
@@ -112,6 +112,13 @@ test('a problem reads like the written column', () => {
   assert.deepEqual(problemLines(add), ['847', `${SIGN.add} 296`, `${SIGN.add} 61`]);
   assert.deepEqual(problemLines(sub), ['23', `${SIGN.sub} 7`]);
   assert.equal(describe(sub), `23 ${SIGN.sub} 7`);
+});
+
+test('the ceiling is the whole board, so three-digit multiplication fits', () => {
+  assert.equal(TEST_ONES, 5, 'no rod is spent on fractions while testing');
+  assert.equal(CAPACITY, 999999, 'six rods of whole numbers');
+  assert.ok(999 * 999 <= CAPACITY, 'a three-digit product fits');
+  assert.ok(10 ** 7 - 1 > CAPACITY, 'but seven digits do not');
 });
 
 test('every level names the skill it teaches', () => {

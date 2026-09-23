@@ -1,9 +1,9 @@
 // Practice-mode problems, and the bead-movement classifier they rest on.
 //
-// Test mode normalizes the decimal marker to the default ones column, which
-// leaves four integer places and a ceiling of 9999. Every answer has to fit
-// that, and a subtraction must never pass through a negative running total,
-// because the board cannot show a negative number.
+// Test mode puts the decimal marker on the last column and freezes it there, so
+// the board spends nothing on fractions: six rods of whole numbers, ceiling
+// 999999. Every answer has to fit that, and a subtraction must never pass
+// through a negative running total, because the board cannot show one.
 //
 // Difficulty follows the classical soroban order rather than digit count:
 // direct movements, then the 5-complements (Small Friends), then the
@@ -11,9 +11,13 @@
 // (Double Combination), then multi-row drills. Multiplication is the times
 // table plus bookkeeping, so it tiers by operand width on the same levels.
 
-export const PLACES = 4;
-export const CAPACITY = 10 ** PLACES - 1; // 9999, with the decimal on the default ones column
-export const TEST_ONES = 3;
+import { COLUMNS } from './model';
+
+// The decimal sits on the last column while testing, so every rod carries a
+// whole number and nothing is spent on fraction places.
+export const PLACES = COLUMNS;
+export const TEST_ONES = COLUMNS - 1;
+export const CAPACITY = 10 ** PLACES - 1; // 999999, the most six rods can show
 export const MULTI_ROW = 10;
 
 export type Operation = 'add' | 'sub' | 'mul';
@@ -138,14 +142,16 @@ const ALLOWED: Record<Level, Move[]> = {
   5: ['direct', 'small', 'big', 'double'],
 };
 
-// Multiplication is bookkeeping on top of the times table, so each level is a
-// wider pair of operands. 99 x 99 = 9801 is the last width that fits the board.
+// Multiplication is bookkeeping on top of the times table, so each level widens
+// the pair of operands, and it is the multiplier's width that adds partial
+// products. 999 x 999 = 998001 still fits the board, but a three-digit
+// multiplier wants a level of its own and there is none above 2 x 3 yet.
 const MUL_WIDTH: Record<Level, { a: [number, number]; b: [number, number] }> = {
   1: { a: [2, 9], b: [2, 9] },
   2: { a: [2, 9], b: [10, 99] },
   3: { a: [2, 9], b: [100, 999] },
   4: { a: [10, 99], b: [10, 99] },
-  5: { a: [20, 99], b: [20, 99] },
+  5: { a: [10, 99], b: [100, 999] },
 };
 
 const LEVEL_NAMES: Record<Level, { move: string; multiply: string }> = {
@@ -153,7 +159,7 @@ const LEVEL_NAMES: Record<Level, { move: string; multiply: string }> = {
   2: { move: 'small friends', multiply: '1×2' },
   3: { move: 'big friends', multiply: '1×3' },
   4: { move: 'double combination', multiply: '2×2' },
-  5: { move: 'multi-row', multiply: '2×2 hard' },
+  5: { move: 'multi-row', multiply: '2×3' },
 };
 
 export function levelLabel(level: Level): string {
@@ -224,24 +230,24 @@ function subWithBorrow(level: Level, rand: () => number): number[] {
   return extend('sub', [start, s], level, 3, rand);
 }
 
-// The classic exam column: ten numbers, one answer. Addends never exceed three
-// digits so the total stays inside the board (10 x 999 = 9990), and a
+// The classic exam column: ten numbers, one answer. With six whole-number rods
+// the rows can run to four digits - ten of those still total six figures - and a
 // subtraction is built from its subtrahends so no step passes through zero.
 function multiRow(op: Operation, rand: () => number): number[] {
   if (op === 'add') {
-    const operands = [randInt(rand, 100, 999)];
+    const operands = [randInt(rand, 100, 9999)];
     let total = operands[0];
     while (operands.length < MULTI_ROW) {
-      const a = Math.min(randInt(rand, 1, 999), CAPACITY - total);
+      const a = Math.min(randInt(rand, 1, 9999), CAPACITY - total);
       if (a < 1) break;
       operands.push(a);
       total += a;
     }
     return operands;
   }
-  const parts = Array.from({ length: MULTI_ROW - 1 }, () => randInt(rand, 1, 555));
+  const parts = Array.from({ length: MULTI_ROW - 1 }, () => randInt(rand, 1, 5555));
   const sum = parts.reduce((a, b) => a + b, 0);
-  return [Math.min(CAPACITY, sum + randInt(rand, 1, 999)), ...parts];
+  return [Math.min(CAPACITY, sum + randInt(rand, 1, 9999)), ...parts];
 }
 
 function operandsFor(op: Operation, level: Level, rand: () => number): number[] {
