@@ -279,7 +279,7 @@ const coordsX = (e: PointerEvent) => { const rect = svg.getBoundingClientRect();
 const columnAtX = (x: number) => Math.max(0, Math.min(COLUMNS - 1, Math.floor((x - 20) / (560 / COLUMNS))));
 const easeOut = (t: number) => 1 - (1 - t) ** 3;
 
-const WIPE_DUR = 180, REVERT_DUR = 140, BEAD_STAGGER = 12, COLUMN_STAGGER = 45, ARM_DISTANCE = 8;
+const WIPE_DUR = 180, REVERT_DUR = 140, BEAD_STAGGER = 12, COLUMN_STAGGER = 45, ARM_DISTANCE = 8, AT_REST = .5;
 type Tween = { col: number; slot: number; from: number; to: number; start: number; dur: number };
 type Wipe = { id: number; from: number[][]; reached: Set<number>; last: number; startX: number; startY: number; armed: boolean };
 let tweens: Tween[] = [];
@@ -290,10 +290,15 @@ let wipe: Wipe | null = null;
 // travels the same distance, so a staggered column never overlaps in flight.
 function tweenColumn(col: number, delay: number, dur: number, to: number[] = REST) {
   const now = performance.now();
-  settling = true;
   for (let slot = 0; slot < 5; slot++) {
     const bead = beadAt(col, slot);
+    // A bead already at rest has nothing to do, so it gets no tween. Leaving it
+    // out also keeps it out of the landing ticks below, which is the point:
+    // sweeping a rod that needs no clearing stays quiet instead of clicking at
+    // beads that never moved.
+    if (Math.abs(to[slot] - bead.y) < AT_REST) continue;
     bead.v = 0;
+    settling = true;
     tweens = tweens.filter(t => !(t.col === col && t.slot === slot));
     tweens.push({ col, slot, from: bead.y, to: to[slot], start: now + delay + (slot ? slot * BEAD_STAGGER : 0), dur });
   }
@@ -341,7 +346,7 @@ function advanceTweens(now: number) {
   const done = tweens.filter(t => now > t.start + t.dur);
   if (!done.length) return;
   tweens = tweens.filter(t => now <= t.start + t.dur);
-  // One tick per column as it lands, rather than one per bead.
+  // One tick per column that actually moved, once its last bead lands.
   for (const col of new Set(done.map(t => t.col))) if (!tweens.some(t => t.col === col)) clickSound(140);
   if (!tweens.length && settling) { settling = false; save(); }
 }
