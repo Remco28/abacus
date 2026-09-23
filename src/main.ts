@@ -1,17 +1,26 @@
 import './style.css';
 import { COLUMNS, SIZE, UPPER, LOWER, createBoard, digit, formatValue, placeName, moveBead, step, ShakeDetector } from './model';
+import { CAPACITY, LEVELS, TEST_ONES, describe as describeProblem, generate, levelLabel, problemLines, type Level, type Operation, type Problem } from './problems';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const svg = document.getElementById('board') as unknown as SVGSVGElement;
 svg.setAttribute('preserveAspectRatio', 'none');
 let board = createBoard();
 let ones = 3, sound = true;
+// Test mode. The problem is read in a dialog and solved on the beads; the
+// decimal is normalized and then frozen, so every answer the generator can ask
+// for fits the four whole-number places it leaves.
+type Verdict = 'none' | 'right' | 'wrong' | 'revealed';
+type TestState = { on: boolean; ops: Operation[]; level: Level; problem: Problem | null; onesBefore: number; verdict: Verdict };
+let test: TestState = { on: false, ops: ['add'], level: 1, problem: null, onesBefore: 3, verdict: 'none' };
+let decimalFrozen = false;
 let audio: AudioContext | undefined;
 let contactBuffer: AudioBuffer | undefined;
 let lastSound = 0;
 const status = (message: string) => { $('status').textContent = message; };
-type Saved = { positions: number[][]; ones: number };
-const snapshot = (): Saved => ({ positions: board.map(c => [...c.upper, ...c.lower].map(b => b.y)), ones });
+type SavedTest = { on: boolean; ops: Operation[]; level: Level; problem: Problem | null; onesBefore: number };
+type Saved = { positions: number[][]; ones: number; test?: SavedTest };
+const snapshot = (): Saved => ({ positions: board.map(c => [...c.upper, ...c.lower].map(b => b.y)), ones, test: { on: test.on, ops: [...test.ops], level: test.level, problem: test.problem, onesBefore: test.onesBefore } });
 function restore(saved: Saved) {
   board = createBoard();
   if (!Number.isInteger(saved.ones) || saved.ones < 0 || saved.ones >= COLUMNS || saved.positions?.length !== COLUMNS) return;
@@ -25,7 +34,7 @@ function restore(saved: Saved) {
 }
 try {
   const saved = JSON.parse(localStorage.getItem('soroban-v1') || 'null');
-  if (saved) { restore(saved); sound = saved.sound !== false; }
+  if (saved) { restore(saved); sound = saved.sound !== false; restoreTest(saved.test); }
 } catch { /* Storage can be unavailable in private browsing. */ }
 function save() {
   try { localStorage.setItem('soroban-v1', JSON.stringify({ ...snapshot(), sound })); } catch { /* The board still works without persistence. */ }
@@ -99,7 +108,7 @@ function labels() {
   ($('decimal') as HTMLInputElement).value = String(ones);
   $('decimal').setAttribute('aria-valuetext', `Ones at column ${ones + 1} from left; ${COLUMNS - ones - 1} decimal places`);
 }
-function setOnes(i: number) { if (i === ones) return; cancelPointers(); ones = i; labels(); render(); save(); status(`Column ${i + 1} is now ones.`); }
+function setOnes(i: number) { if (decimalFrozen || i === ones) return; cancelPointers(); ones = i; labels(); render(); save(); status(`Column ${i + 1} is now ones.`); }
 $('decimal').oninput = () => setOnes(Number(($('decimal') as HTMLInputElement).value));
 // Keep the native range for keyboard/assistive input, but own pointer gestures
 // so a tap on its track or a brush over its thumb can never change the value.
@@ -121,7 +130,7 @@ function decimalHint(message: string) {
   hintTimer = setTimeout(() => { delete decimalTrack.dataset.hint; }, 2200);
 }
 function lockDecimal() { decimalUnlocked = false; decimal.classList.remove('unlocked'); $('decimal-lock').textContent = '🔒'; $('decimal-lock').setAttribute('aria-label', 'Unlock decimal slider'); $('decimal-lock').setAttribute('aria-pressed', 'false'); clearTimeout(hintTimer); delete decimalTrack.dataset.hint; }
-function toggleDecimalLock() { decimalUnlocked = !decimalUnlocked; decimal.classList.toggle('unlocked', decimalUnlocked); $('decimal-lock').textContent = decimalUnlocked ? '🔓' : '🔒'; $('decimal-lock').setAttribute('aria-label', decimalUnlocked ? 'Lock decimal slider' : 'Unlock decimal slider'); $('decimal-lock').setAttribute('aria-pressed', String(decimalUnlocked)); if (decimalUnlocked) { decimalHint('Drag the caret'); status('Decimal unlocked. Drag, then tap the lock to secure it.'); } else { status('Decimal position locked.'); } }
+function toggleDecimalLock() { if (decimalFrozen) return; decimalUnlocked = !decimalUnlocked; decimal.classList.toggle('unlocked', decimalUnlocked); $('decimal-lock').textContent = decimalUnlocked ? '🔓' : '🔒'; $('decimal-lock').setAttribute('aria-label', decimalUnlocked ? 'Lock decimal slider' : 'Unlock decimal slider'); $('decimal-lock').setAttribute('aria-pressed', String(decimalUnlocked)); if (decimalUnlocked) { decimalHint('Drag the caret'); status('Decimal unlocked. Drag, then tap the lock to secure it.'); } else { status('Decimal position locked.'); } }
 ($('decimal-lock') as HTMLButtonElement).onclick = toggleDecimalLock;
 decimalGesture.addEventListener('pointerdown', e => {
   e.preventDefault();
@@ -293,6 +302,188 @@ $('motion').onclick = async () => {
   } catch { motionStatus(blockedHelp); }
   finally { ($('motion') as HTMLButtonElement).disabled = false; }
 };
+// --- Test mode --------------------------------------------------------------
+// Read the problem in a dialog, solve it on the beads, submit. The numbers are
+// hidden while solving, which is what the flash-card drill does and what keeps
+// a ten-row column from covering the board it is worked out on.
+const problemDialog = $('problem-dialog') as HTMLDialogElement;
+const problemLinesBox = $('problem-lines');
+const problemHeading = $('problem-heading');
+const problemNote = $('problem-note');
+const problemActions = $('problem-actions');
+
+// What the tally shows, trailing zeros and all, and the number behind it for
+// comparing against an answer. The verdict quotes the first, so it reads the
+// same as the readout the learner is looking at.
+const boardValue = () => formatValue(board.map(digit), ones);
+const currentValue = () => Number(boardValue());
+
+function addAction(label: string, primary: boolean, run: () => void) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.textContent = label;
+  button.className = primary ? 'primary' : '';
+  button.onclick = run;
+  problemActions.appendChild(button);
+}
+
+function renderProblem() {
+  const problem = test.problem;
+  problemLinesBox.innerHTML = '';
+  problemActions.innerHTML = '';
+  if (!problem) return;
+  const lines = problemLines(problem);
+  // A ten-row column needs smaller type or it will not fit a phone dialog.
+  problemLinesBox.className = lines.length > 6 ? 'problem-lines wide' : 'problem-lines';
+  lines.forEach((line, i) => {
+    const row = document.createElement('div');
+    row.textContent = line;
+    if (i && i === lines.length - 1) row.className = 'rule';
+    problemLinesBox.appendChild(row);
+  });
+  if (test.verdict === 'right') {
+    problemHeading.textContent = 'Correct';
+    problemNote.textContent = `${describeProblem(problem)} = ${problem.answer}`;
+    addAction('Next problem', true, nextProblem);
+  } else if (test.verdict === 'wrong') {
+    problemHeading.textContent = 'Not quite';
+    problemNote.textContent = `Your board shows ${boardValue()}.`;
+    addAction('Clear board', false, () => { problemDialog.close(); reset(); status('Board cleared. Same problem. Submit when it is right.'); });
+    addAction('Keep board', false, () => { problemDialog.close(); status('Board kept. Adjust it and submit again.'); });
+    addAction('Reveal answer', false, revealAnswer);
+  } else if (test.verdict === 'revealed') {
+    problemHeading.textContent = 'Answer';
+    problemNote.textContent = `${describeProblem(problem)} = ${problem.answer}`;
+    addAction('Next problem', true, nextProblem);
+  } else {
+    problemHeading.textContent = 'Problem';
+    problemNote.textContent = 'Read it, then close this and work it out on the beads.';
+    addAction('Close', true, () => problemDialog.close());
+  }
+}
+
+function newProblem() {
+  test.problem = generate(test.ops, test.level);
+  test.verdict = 'none';
+  renderProblem();
+  save();
+}
+
+function showProblem() {
+  if (!test.problem) test.problem = generate(test.ops, test.level);
+  test.verdict = 'none';
+  renderProblem();
+  if (!problemDialog.open) problemDialog.showModal();
+  status(`Problem: ${describeProblem(test.problem)}`);
+}
+
+function nextProblem() {
+  newProblem();
+  renderProblem();
+  status(`Problem: ${describeProblem(test.problem!)}`);
+}
+
+function revealAnswer() {
+  test.verdict = 'revealed';
+  renderProblem();
+  status(`The answer is ${test.problem!.answer}.`);
+}
+
+function submitAnswer() {
+  if (!test.problem) return;
+  const shown = currentValue();
+  const right = shown === test.problem.answer;
+  test.verdict = right ? 'right' : 'wrong';
+  clickSound();
+  renderProblem();
+  if (!problemDialog.open) problemDialog.showModal();
+  status(right ? 'Correct.' : `Not yet. Your board shows ${shown}.`);
+  save();
+}
+
+function setTestMode(on: boolean) {
+  test.on = on;
+  if (on) {
+    test.onesBefore = ones;
+    // Normalize first, then freeze. Every test then has the same four
+    // whole-number places, so a level means the same thing for everyone.
+    decimalFrozen = false;
+    setOnes(TEST_ONES);
+    decimalFrozen = true;
+    lockDecimal();
+    test.verdict = 'none';
+    if (!test.problem) test.problem = generate(test.ops, test.level);
+  } else {
+    decimalFrozen = false;
+    if (problemDialog.open) problemDialog.close();
+    setOnes(test.onesBefore);
+  }
+  applyTestUi();
+  save();
+}
+
+function applyTestUi() {
+  document.body.classList.toggle('testing', test.on);
+  const mode = $('test-mode');
+  mode.textContent = test.on ? 'On' : 'Off';
+  mode.setAttribute('aria-pressed', String(test.on));
+  ($('problem') as HTMLButtonElement).hidden = !test.on;
+  ($('submit') as HTMLButtonElement).hidden = !test.on;
+  ($('decimal-lock') as HTMLButtonElement).hidden = test.on;
+  for (const [id, op] of [['op-add', 'add'], ['op-sub', 'sub'], ['op-mul', 'mul']] as Array<[string, Operation]>) {
+    $(id).setAttribute('aria-pressed', String(test.ops.includes(op)));
+  }
+  const select = $('level') as HTMLSelectElement;
+  if (select.options.length) select.value = String(test.level);
+}
+
+function isProblem(value: unknown): value is Problem {
+  const problem = value as Problem | null;
+  return !!problem && ['add', 'sub', 'mul'].includes(problem.op) && Array.isArray(problem.operands)
+    && problem.operands.length > 1 && problem.operands.every((n) => Number.isInteger(n) && n > 0 && n <= CAPACITY)
+    && Number.isInteger(problem.answer) && problem.answer >= 0 && problem.answer <= CAPACITY;
+}
+
+function restoreTest(raw: unknown) {
+  if (!raw || typeof raw !== 'object') return;
+  const saved = raw as Partial<SavedTest>;
+  const ops = Array.isArray(saved.ops) ? saved.ops.filter((op): op is Operation => op === 'add' || op === 'sub' || op === 'mul') : [];
+  if (ops.length) test.ops = ops;
+  if (saved.level && LEVELS.includes(saved.level)) test.level = saved.level;
+  if (Number.isInteger(saved.onesBefore) && saved.onesBefore! >= 0 && saved.onesBefore! < COLUMNS) test.onesBefore = saved.onesBefore!;
+  if (isProblem(saved.problem)) test.problem = saved.problem;
+  if (!saved.on) return;
+  test.on = true;
+  decimalFrozen = true;
+  ones = TEST_ONES;
+  if (!test.problem) test.problem = generate(test.ops, test.level);
+  applyTestUi();
+}
+
+const levelSelect = $('level') as HTMLSelectElement;
+for (const level of LEVELS) {
+  const option = document.createElement('option');
+  option.value = String(level);
+  option.textContent = levelLabel(level);
+  levelSelect.appendChild(option);
+}
+levelSelect.onchange = () => { test.level = Number(levelSelect.value) as Level; if (test.on) newProblem(); save(); };
+($('test-mode') as HTMLButtonElement).onclick = () => setTestMode(!test.on);
+for (const [id, op] of [['op-add', 'add'], ['op-sub', 'sub'], ['op-mul', 'mul']] as Array<[string, Operation]>) {
+  ($(id) as HTMLButtonElement).onclick = () => {
+    const off = test.ops.includes(op);
+    if (off && test.ops.length === 1) { status('Test mode needs at least one operation.'); return; }
+    test.ops = off ? test.ops.filter((each) => each !== op) : [...test.ops, op];
+    if (test.on) newProblem();
+    applyTestUi();
+    save();
+  };
+}
+($('problem') as HTMLButtonElement).onclick = showProblem;
+($('submit') as HTMLButtonElement).onclick = submitAnswer;
+($('close-problem') as HTMLButtonElement).onclick = () => problemDialog.close();
+applyTestUi();
+
 const settings = $('settings-dialog') as HTMLDialogElement;
 const welcome = $('welcome-dialog') as HTMLDialogElement;
 $('settings').onclick = () => { lockDecimal(); cancelPointers(); settings.showModal(); };
