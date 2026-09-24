@@ -118,11 +118,31 @@ try {
   // would let it enable motion and pass this for the wrong reason.
   await evaluate('document.querySelector("#motion").click(); window.originalQuery = navigator.permissions.query.bind(navigator.permissions); window.originalRequest = DeviceMotionEvent.requestPermission; navigator.permissions.query = async () => ({state:"denied"}); DeviceMotionEvent.requestPermission = async () => "denied"; document.querySelector("#motion").click()');
   await pause(100);
-  assert.match(await evaluate('document.querySelector("#motion-status").textContent'), /Brave.*Motion sensors/, 'blocked sensor guidance');
+  assert.match(await evaluate('document.querySelector("#motion-status").textContent'), /blocked or unavailable/, 'blocked sensor guidance');
   assert.equal(await evaluate('document.querySelector("#motion").getAttribute("aria-pressed")'), 'false');
+  // The steps live in a different place on every platform, and the phone is the
+  // one that has to find them, so an Android user agent should be told where the
+  // per-site Motion sensors permission is and where the global one is.
+  await evaluate('Object.defineProperty(navigator, "userAgent", { configurable: true, get: () => "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36" }); document.querySelector("#motion").click()');
+  await pause(100);
+  const androidHelp = await evaluate('document.querySelector("#motion-status").textContent');
+  assert.match(androidHelp, /Permissions → set Motion sensors to Allow/, 'android guidance opens the per-site permission');
+  assert.match(androidHelp, /Site settings → Motion sensors/, 'and names the global fallback');
+  await evaluate('delete navigator.userAgent');
   await evaluate('navigator.permissions.query = window.originalQuery; window.originalRequest ? (DeviceMotionEvent.requestPermission = window.originalRequest) : delete DeviceMotionEvent.requestPermission; window.blockMotion = e => e.stopImmediatePropagation(); window.addEventListener("devicemotion", window.blockMotion, true); document.querySelector("#motion").click()');
   await pause(6300);
   assert.match(await evaluate('document.querySelector("#motion-status").textContent'), /blocked or unavailable/, 'no-data timeout');
+  // Chrome fires devicemotion even when the per-site permission is blocked; the
+  // event just carries null axes. Three of those should name the permission and
+  // give up, rather than wait out the six seconds for "unavailable". Enabling
+  // awaits the permission, so the readings have to come after it, not in the
+  // same turn as the click.
+  await evaluate('window.removeEventListener("devicemotion", window.blockMotion, true); document.querySelector("#motion").click()');
+  await pause(150);
+  await evaluate('for (let i = 0; i < 3; i++) window.dispatchEvent(new DeviceMotionEvent("devicemotion", { acceleration: { x: null, y: null, z: null }, accelerationIncludingGravity: { x: null, y: null, z: null } }))');
+  await pause(100);
+  assert.match(await evaluate('document.querySelector("#motion-status").textContent'), /empty sensor readings/, 'null axes are reported as a blocked permission');
+  assert.equal(await evaluate('document.querySelector("#motion").getAttribute("aria-pressed")'), 'false', 'and stop waiting for data that will not come');
   // Opening Settings locks the caret, and a locked caret swallows the arrow keys
   // on purpose, so the keyboard path has to unlock first — which is what the
   // help text says and what the lock button is for.
@@ -134,6 +154,20 @@ try {
   assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true, 'landscape has no horizontal overflow');
   assert.equal(await evaluate('document.documentElement.scrollHeight <= innerHeight'), true, 'landscape fits screen');
   assert.equal(await evaluate('document.querySelector("#board").getBoundingClientRect().height > innerHeight * .7'), true, 'landscape mostly board');
+  // The Help steps are longer than everything else in Settings and only a phone
+  // needs them, so check the longest of them is reachable on a small screen
+  // without sideways scrolling, and that the steps name the settings by name.
+  await send('Emulation.setDeviceMetricsOverride', { width: 360, height: 640, deviceScaleFactor: 2, mobile: true });
+  // Turn multiplication on too, so both level selects — the widest controls in
+  // the dialog, since a select is as wide as its longest rung name — are shown.
+  await evaluate('document.querySelector("#settings").click(); document.querySelector("#op-mul").click(); for (const d of document.querySelectorAll("#settings-dialog details")) d.open = true');
+  await pause(150);
+  const help = await evaluate('(() => { const d = document.querySelector("#settings-dialog"); const last = document.querySelector("#install-help"); d.scrollTop = d.scrollHeight; return { across: d.scrollWidth <= d.clientWidth, bottom: last.getBoundingClientRect().bottom, view: innerHeight }; })()');
+  assert.equal(help.across, true, 'expanded help has no horizontal overflow');
+  assert.ok(help.bottom <= help.view + 1, `and its last line can be scrolled to (${help.bottom} vs ${help.view})`);
+  const helpText = await evaluate('document.querySelector("#settings-dialog").textContent');
+  assert.match(helpText, /Permissions → set Motion sensors to Allow/, 'the help names the android per-site permission');
+  assert.match(helpText, /Motion & Orientation Access/, 'and the iPhone setting by name');
   assert.deepEqual(errors, [], 'no browser exceptions');
-  console.log('PASS: multi-touch, decimal hold-to-drag on touch/mouse, accidental gesture lockout, cancellation/relocking, keyboard, persistence, welcome, shake, motion guidance, landscape, no runtime errors.');
+  console.log('PASS: multi-touch, decimal hold-to-drag on touch/mouse, accidental gesture lockout, cancellation/relocking, keyboard, persistence, welcome, shake, per-platform motion guidance, settings help layout, landscape, no runtime errors.');
 } finally { ws.close(); }

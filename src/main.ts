@@ -451,45 +451,84 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) { end
 window.addEventListener('pagehide', save);
 window.addEventListener('blur', () => { cancelPointers(); endWipe(false, false); });
 
-let motionEnabled = false, motionReceived = false, motionTimer: ReturnType<typeof setTimeout> | undefined;
+let motionEnabled = false, motionReceived = false, emptyReadings = 0, motionTimer: ReturnType<typeof setTimeout> | undefined;
 let detector = new ShakeDetector();
 let gravity: number[] | undefined;
 const motionStatus = (message: string) => { $('motion-status').textContent = message; };
-const blockedHelp = 'Motion is blocked or unavailable. In Brave on Android, allow Settings → Site settings → Motion sensors for this site, then retry Enable. On iPhone, check Motion & Orientation permission or try Safari.';
+// Unblocking motion happens in the browser's own settings, and which screen that
+// is depends entirely on the phone in hand: Chrome and Brave keep a per-site
+// Motion sensors permission, iOS asks its own question in its own place, and a
+// laptop has no sensor to read at all. One paragraph trying to cover all three
+// sends everybody to the wrong menu, which is what "it would not turn on"
+// usually means, so the steps are picked from the user agent instead. Read when
+// the message is needed rather than at startup, so both a real phone and a test
+// standing in for one get the right one.
+function motionHelp(): string {
+  const ua = navigator.userAgent;
+  // iPadOS reports a desktop user agent, so touch points are what give it away.
+  if (/iPad|iPhone|iPod/.test(ua) || (navigator.maxTouchPoints > 1 && /Macintosh/.test(ua)))
+    return 'Allow Motion & Orientation Access when Safari asks. If it never asks, open Settings → Safari and turn on Motion & Orientation Access — under Privacy & Security or Advanced, depending on the iOS version. If readings still do not arrive, open this page in Safari.';
+  if (/Android/.test(ua))
+    return 'Tap the icon left of the address bar → Permissions → set Motion sensors to Allow, then reload the page. If it is not listed there, open the browser menu (the three dots at the top right) → Settings → Site settings → Motion sensors. Brave blocks motion sensors by default, so this site needs the Allow.';
+  if (/Mobile|Tablet/.test(ua)) return 'Allow motion sensors when your browser asks, then try Enable again.';
+  return 'Shake to clear needs a phone or tablet — this device did not report a motion sensor.';
+}
+const blockedHelp = () => `Motion is blocked or unavailable. ${motionHelp()}`;
+// Chrome fires devicemotion even when the per-site Motion sensors permission is
+// blocked; the event simply arrives with every axis null. That is a different
+// fault from a silent sensor and it has its own fix, so it gets its own wording.
+const emptyHelp = 'Your browser is sending empty sensor readings, which means motion sensors are blocked for this site. ';
+// One way out of motion, whatever the reason: stop listening and say so.
+function failMotion(help: string) {
+  if (!motionEnabled) return;
+  motionEnabled = false;
+  window.removeEventListener('devicemotion', onMotion);
+  clearTimeout(motionTimer);
+  motionLabel();
+  motionStatus(help);
+}
 function onMotion(event: DeviceMotionEvent) {
   if (!motionEnabled || document.hidden) return;
   const raw = event.acceleration;
-  let values: number[];
+  let values: number[] | undefined;
   if (raw && [raw.x, raw.y, raw.z].every(v => typeof v === 'number' && Number.isFinite(v))) values = [raw.x!, raw.y!, raw.z!];
   else {
     const a = event.accelerationIncludingGravity;
-    if (!a || ![a.x, a.y, a.z].every(v => typeof v === 'number' && Number.isFinite(v))) return;
-    const axes = [a.x!, a.y!, a.z!];
-    gravity ??= [...axes];
-    values = axes.map((v, i) => { gravity![i] = .85 * gravity![i] + .15 * v; return v - gravity![i]; });
+    if (a && [a.x, a.y, a.z].every(v => typeof v === 'number' && Number.isFinite(v))) {
+      const axes = [a.x!, a.y!, a.z!];
+      gravity ??= [...axes];
+      values = axes.map((v, i) => { gravity![i] = .85 * gravity![i] + .15 * v; return v - gravity![i]; });
+      if (!values.every(Number.isFinite)) values = undefined;
+    }
   }
-  if (!values.every(Number.isFinite)) return;
+  if (!values) {
+    // Three empty events in a row is the blocked-permission signature rather
+    // than a hiccup, so name the setting now instead of making the user sit out
+    // the six seconds that would have said only "unavailable".
+    if (++emptyReadings >= 3) failMotion(emptyHelp + motionHelp());
+    return;
+  }
   if (!motionReceived) { motionReceived = true; clearTimeout(motionTimer); motionLabel(); motionStatus('Sensor connected. Three distinct shakes within two seconds will clear the board.'); }
   if (detector.sample(Math.hypot(...values), performance.now())) reset(true);
 }
 function motionLabel() { $('motion').setAttribute('aria-pressed', String(motionEnabled && motionReceived)); $('motion').textContent = motionEnabled ? (motionReceived ? 'On' : 'Cancel') : 'Enable'; }
 $('motion').onclick = async () => {
   if (motionEnabled) { motionEnabled = false; window.removeEventListener('devicemotion', onMotion); clearTimeout(motionTimer); motionLabel(); motionStatus('Shake reset is off.'); return; }
-  if (!window.isSecureContext || typeof DeviceMotionEvent === 'undefined') { motionStatus(blockedHelp); return; }
+  if (!window.isSecureContext || typeof DeviceMotionEvent === 'undefined') { motionStatus(blockedHelp()); return; }
   ($('motion') as HTMLButtonElement).disabled = true;
   try {
     const Motion = DeviceMotionEvent as typeof DeviceMotionEvent & { requestPermission?: () => Promise<string> };
     // Request iOS access immediately inside the click; awaiting other APIs first loses user activation.
-    if (Motion.requestPermission && await Motion.requestPermission() !== 'granted') { motionStatus(blockedHelp); return; }
+    if (Motion.requestPermission && await Motion.requestPermission() !== 'granted') { motionStatus(blockedHelp()); return; }
     if (!Motion.requestPermission && navigator.permissions) {
       const permissions = await Promise.all(['accelerometer', 'gyroscope'].map(name => navigator.permissions.query({ name: name as PermissionName }).catch(() => null)));
-      if (permissions.some(p => p?.state === 'denied')) { motionStatus(blockedHelp); return; }
+      if (permissions.some(p => p?.state === 'denied')) { motionStatus(blockedHelp()); return; }
     }
-    motionEnabled = true; motionReceived = false; gravity = undefined; detector = new ShakeDetector(); motionLabel();
+    motionEnabled = true; motionReceived = false; emptyReadings = 0; gravity = undefined; detector = new ShakeDetector(); motionLabel();
     window.addEventListener('devicemotion', onMotion);
     motionStatus('Waiting for motion data. Move your phone gently to check the connection…');
-    motionTimer = setTimeout(() => { if (!motionReceived && motionEnabled) { motionEnabled = false; window.removeEventListener('devicemotion', onMotion); motionLabel(); motionStatus(blockedHelp); } }, 6000);
-  } catch { motionStatus(blockedHelp); }
+    motionTimer = setTimeout(() => { if (!motionReceived) failMotion(blockedHelp()); }, 6000);
+  } catch { motionStatus(blockedHelp()); }
   finally { ($('motion') as HTMLButtonElement).disabled = false; }
 };
 // --- Test mode --------------------------------------------------------------
