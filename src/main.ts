@@ -820,36 +820,152 @@ $('start').onclick = () => welcome.close();
 welcome.addEventListener('close', () => { try { localStorage.setItem('soroban-welcomed', '1'); } catch { /* Optional first-visit memory. */ } });
 
 // --- Visual tutorial --------------------------------------------------------
-// The lesson board is separate from the working board: children can explore
-// freely without losing the number already on their soroban. Every challenge is
-// a bead move, with the arithmetic shown as a diagram rather than a lecture.
+// The lesson board is separate from the working board. Each step says what to
+// do, what the beads represent, and why the step is valid; the learner can show
+// it, reset to the previous total, and make the same move themselves.
+type TutorialStep = { value: number; action: string; why: string; count?: number };
 type TutorialLesson = {
   title: string;
   start: number;
-  goal: number;
   equation: string[];
-  moves?: string[];
-  demo: number[];
-  groups?: { count: number; each: number };
+  story: string;
+  boardRole: string;
+  steps: TutorialStep[];
+  countLabel?: string;
+  countGoal?: number;
 };
+
 const tutorialLessons: Record<Operation, TutorialLesson[]> = {
   add: [
-    { title: 'Make a number', start: 0, goal: 4, equation: ['4'], moves: ['+4'], demo: [0, 4] },
-    { title: 'The 5 friend', start: 4, goal: 7, equation: ['4', '+', '3', '=', '7'], moves: ['+5', '−2'], demo: [4, 9, 7] },
-    { title: 'Make a ten', start: 8, goal: 15, equation: ['8', '+', '7', '=', '15'], moves: ['+10', '−3'], demo: [8, 18, 15] },
+    {
+      title: 'Add by counting on', start: 4, equation: ['4', '+', '3', '=', '7'],
+      story: 'The abacus holds the running total. Adding means changing the beads so the tally grows by the amount you add.',
+      boardRole: 'The beads show the running total.',
+      steps: [{ value: 7, action: 'Add 3. Move the 5-bead toward the bar, then move 2 one-beads away.', why: 'That changes the rod by +5 − 2, which is the same as +3. The 5-bead helps when there are not enough loose one-beads.' }],
+    },
+    {
+      title: 'Make a ten', start: 8, equation: ['8', '+', '7', '=', '15'],
+      story: 'When a rod cannot show all the ones you need, make a full ten on that rod and carry it to the next place.',
+      boardRole: 'The beads show the running total.',
+      steps: [
+        { value: 18, action: 'First add 10: move 1 bead on the tens rod.', why: 'We temporarily add a whole ten so the ones rod has room for the next move.' },
+        { value: 15, action: 'Now take 3 ones back.', why: '7 is 10 − 3. Adding 10 and taking 3 away changes 8 by exactly +7. The board now reads 15.' },
+      ],
+    },
+    {
+      title: 'Add a longer number', start: 187, equation: ['187', '+', '246', '=', '433'],
+      story: 'Work from the largest place to the smallest. After each move, the board keeps the total so far; you do not have to hold every partial sum in your head.',
+      boardRole: 'The beads show the running total.',
+      steps: [
+        { value: 387, action: 'Add 2 hundreds: move the hundreds rod from 1 to 3.', why: '246 has 2 hundreds. 187 + 200 = 387.' },
+        { value: 427, action: 'Add 4 tens: move the tens rod from 8 to 2, carrying 1 hundred.', why: 'The tens rod cannot show 12 tens. Ten of those tens become one hundred, so 387 + 40 = 427.' },
+        { value: 433, action: 'Add the 6 ones.', why: '427 + 6 = 433. Each place was added once; the final board is the sum.' },
+      ],
+    },
   ],
   sub: [
-    { title: 'Take away', start: 7, goal: 5, equation: ['7', '−', '2', '=', '5'], moves: ['−2'], demo: [7, 5] },
-    { title: 'The 5 friend', start: 6, goal: 4, equation: ['6', '−', '2', '=', '4'], moves: ['+3', '−5'], demo: [6, 9, 4] },
-    { title: 'Borrow a ten', start: 12, goal: 5, equation: ['12', '−', '7', '=', '5'], moves: ['−10', '+3'], demo: [12, 2, 5] },
+    {
+      title: 'Take away', start: 7, equation: ['7', '−', '2', '=', '5'],
+      story: 'Subtraction means the beads left after you remove an amount. The board is the amount remaining.',
+      boardRole: 'The beads show what remains.',
+      steps: [{ value: 5, action: 'Move 2 one-beads away from the bar.', why: 'Two counted ones are removed from 7. The 5 still counted is the answer.' }],
+    },
+    {
+      title: 'Use a five-friend', start: 6, equation: ['6', '−', '2', '=', '4'],
+      story: 'Sometimes there are not enough loose beads to take away directly. Use an equivalent move that the soroban can make.',
+      boardRole: 'The beads show what remains.',
+      steps: [
+        { value: 9, action: 'Move 3 one-beads toward the bar.', why: 'This is a temporary part of the move, not the answer yet.' },
+        { value: 4, action: 'Move the 5-bead away from the bar.', why: '+3 − 5 = −2, so the net change is subtracting 2. The board reads 4.' },
+      ],
+    },
+    {
+      title: 'Subtract across a ten', start: 52, equation: ['52', '−', '27', '=', '25'],
+      story: 'Break 27 into 20 and 7. The board keeps the remainder after each part, and a ten-friend move handles the 7 when only 2 ones are showing.',
+      boardRole: 'The beads show what remains.',
+      steps: [
+        { value: 32, action: 'Subtract 20: take 2 tens away from 52.', why: '52 − 20 = 32. Keep the ones rod as it is.' },
+        { value: 22, action: 'For the remaining 7, first subtract 10.', why: 'There are only 2 ones to remove directly. Subtracting 10 makes room to use the equivalent +3 − 10 move.' },
+        { value: 25, action: 'Add 3 ones back.', why: '+3 − 10 = −7. We have subtracted the needed 7, and 25 remains.' },
+      ],
+    },
+    {
+      title: 'Subtract hundreds, tens, and ones', start: 400, equation: ['400', '−', '175', '=', '225'],
+      story: 'Split the amount being subtracted by place value. Take each part away and let the board remember the remainder.',
+      boardRole: 'The beads show what remains.',
+      steps: [
+        { value: 300, action: 'Subtract 100.', why: '400 − 100 = 300.' },
+        { value: 230, action: 'Subtract 70.', why: '300 − 70 = 230. The hundreds and tens rods both change.' },
+        { value: 225, action: 'Subtract the final 5 ones.', why: '230 − 5 = 225. Since 100 + 70 + 5 = 175, this is 400 − 175.' },
+      ],
+    },
   ],
   mul: [
-    { title: 'Equal groups', start: 0, goal: 12, equation: ['3', '×', '4', '=', '12'], groups: { count: 3, each: 4 }, demo: [0, 4, 8, 12] },
-    { title: 'Build the product', start: 0, goal: 24, equation: ['6', '×', '4', '=', '24'], groups: { count: 6, each: 4 }, demo: [0, 4, 8, 12, 16, 20, 24] },
+    {
+      title: 'Multiplication makes equal groups', start: 0, equation: ['3', '×', '4', '=', '12'],
+      story: '3 × 4 means three groups of four. The abacus is a running total: add one group, then another, until all three are counted.',
+      boardRole: 'The beads show the total in the groups so far.',
+      steps: [
+        { value: 4, action: 'Add the first group of 4.', why: 'One group counted: 4.' },
+        { value: 8, action: 'Add a second group of 4.', why: 'Two groups: 4 + 4 = 8.' },
+        { value: 12, action: 'Add the last group of 4.', why: 'Three groups: 4 + 4 + 4 = 12. The board total is the product.' },
+      ],
+    },
+    {
+      title: 'Split by place value', start: 0, equation: ['23', '×', '4', '=', '92'],
+      story: 'Break 23 into 20 + 3. Multiply each part by 4, then add the partial products on the board.',
+      boardRole: 'The beads accumulate the partial products.',
+      steps: [
+        { value: 80, action: 'Work out 20 × 4 and put 80 on the board.', why: 'Two tens, each taken 4 times, make 8 tens: 20 × 4 = 80.' },
+        { value: 92, action: 'Work out 3 × 4 = 12, then add 12 to 80.', why: '80 + 12 = 92. The board combines the tens-part and ones-part products.' },
+      ],
+    },
+    {
+      title: 'Multiply 46 × 13', start: 0, equation: ['46', '×', '13', '=', '598'],
+      story: 'Do not try to move beads for “46 times 13” all at once. Split 13 into 10 + 3. First calculate 46 × 10 and put that partial product on the board; then add three more groups of 46.',
+      boardRole: 'The beads hold the product accumulated so far.',
+      steps: [
+        { value: 460, action: 'Multiply 46 by 10. Place 460: 4 hundreds and 6 tens.', why: 'Multiplying by 10 shifts each digit one place left: 46 × 10 = 460. This is the partial product for the 10 in 13.' },
+        { value: 506, action: 'Add the first remaining group of 46.', why: '13 has 3 ones left after its 10. The running product is now 460 + 46 = 506.' },
+        { value: 552, action: 'Add the second group of 46.', why: 'Two of the three extra groups are counted: 506 + 46 = 552.' },
+        { value: 598, action: 'Add the third group of 46.', why: 'That is all 13 groups: 460 + 46 + 46 + 46 = 598. The board has kept the partial products for you.' },
+      ],
+    },
   ],
   div: [
-    { title: 'Share equally', start: 0, goal: 4, equation: ['12', '÷', '3', '=', '?'], groups: { count: 3, each: 4 }, demo: [0, 1, 2, 3, 4] },
-    { title: 'Find each share', start: 0, goal: 8, equation: ['24', '÷', '3', '=', '?'], groups: { count: 3, each: 8 }, demo: [0, 2, 4, 6, 8] },
+    {
+      title: 'Share 12 ÷ 3 equally', start: 12, equation: ['12', '÷', '3', '=', '?'],
+      story: '12 ÷ 3 asks: how many groups of 3 fit into 12? You do not have to memorize the answer. Take away groups of 3, count each group, and stop when nothing is left. The board tracks the remainder; a separate count tracks the answer.',
+      boardRole: 'Beads show the remainder; the counter keeps the number of groups removed.',
+      countLabel: 'Groups removed', countGoal: 4,
+      steps: [
+        { value: 9, count: 1, action: 'Subtract one group of 3. On the ones rod, add 5 then 2 (2 → 9); then remove one ten (1 → 0).', why: 'The ones rod has only 2. The soroban move +7 ones −1 ten changes the total by 7 − 10 = −3, so 12 becomes 9. Count this as one group of 3.' },
+        { value: 6, count: 2, action: 'Take another group of 3 away.', why: 'Two groups of 3 have been removed. Six remain, so the counter is 2.' },
+        { value: 3, count: 3, action: 'Take a third 3 away.', why: 'Three groups removed; one group of 3 remains.' },
+        { value: 0, count: 4, action: 'Take the last 3 away.', why: 'Nothing remains. The counter says four groups, so 12 ÷ 3 = 4.' },
+      ],
+    },
+    {
+      title: 'Use larger groups', start: 84, equation: ['84', '÷', '7', '=', '?'],
+      story: 'Repeatedly subtracting 7 works, but larger equal groups save steps. The abacus tracks the amount left; the quotient note counts how many sevens were taken.',
+      boardRole: 'Beads show the remainder; the counter keeps the number of groups removed.',
+      countLabel: 'Groups removed', countGoal: 12,
+      steps: [
+        { value: 14, count: 10, action: 'Remove 10 groups at once: 7 × 10 = 70.', why: '84 − 70 = 14. Add 10 to the counter; the board keeps the 14 still to divide.' },
+        { value: 0, count: 12, action: 'Remove 2 more groups: 7 × 2 = 14.', why: 'Fourteen is exactly two sevens. Add 2 more groups: the remainder is 0 and 10 + 2 = 12.' },
+      ],
+    },
+    {
+      title: 'Divide 900 ÷ 36', start: 900, equation: ['900', '÷', '36', '=', '?'],
+      story: 'The board tracks the remainder, not the quotient. Choose an easy number of groups, subtract their total, and add those groups to the quotient count. This avoids guessing one group at a time.',
+      boardRole: 'Beads show the remainder; the counter keeps the quotient (groups of 36 removed).',
+      countLabel: 'Groups of 36 removed', countGoal: 25,
+      steps: [
+        { value: 200, action: 'Subtract the 700 part of 720: move 7 hundreds away. 900 becomes 200.', why: 'We chose 20 groups because 36 × 20 = 720. Split that subtraction into place-value chunks: 720 = 700 + 20.' },
+        { value: 180, count: 20, action: 'The tens rod cannot subtract 2 tens directly from zero. Exchange 1 hundred for 10 tens: take 1 hundred away, then add 8 tens. 200 becomes 180. Now count 20 groups of 36.', why: 'Borrowing 1 hundred adds 10 tens. Then 10 tens − 2 tens = 8 tens; the hundreds rod is 1. So 200 − 20 = 180. The full 720 is now removed: 900 − 700 − 20 = 180.' },
+        { value: 0, count: 25, action: 'Take 5 more groups: 36 × 5 = 180. Subtract the 180 left.', why: '36 × 10 = 360. Half of 360 is 180, so five groups make exactly the 180 left. Add 5 to the quotient: 20 + 5 = 25 groups. Check: 36 × 25 = 900.' },
+      ],
+    },
   ],
 };
 const operationNames: Record<Operation, string> = { add: 'Add', sub: 'Subtract', mul: 'Multiply', div: 'Divide' };
@@ -862,22 +978,20 @@ let tutorialLessonNav: HTMLElement | null = null;
 let tutorialOp: Operation = 'add';
 let tutorialIndex = 0;
 let tutorialDigits = [0, 0, 0];
-let demoTimer: ReturnType<typeof setTimeout> | null = null;
-let tutorialDemoOn = false;
-function stopTutorialDemo() {
-  if (demoTimer !== null) clearTimeout(demoTimer);
-  demoTimer = null;
-  tutorialDemoOn = false;
-}
+let tutorialStepIndex = -1;
+let tutorialTryStarted = false;
+let tutorialTryStep = 0;
+let tutorialCount = 0;
+let tutorialCheckMessage = '';
 try {
-  const savedTutorial = JSON.parse(localStorage.getItem('soroban-tutorial-v1') || 'null');
+  const savedTutorial = JSON.parse(localStorage.getItem('soroban-tutorial-v2') || 'null');
   if (savedTutorial && Array.isArray(savedTutorial.done)) savedTutorial.done.filter((key: unknown): key is string => typeof key === 'string' && /^(add|sub|mul|div):\d+$/.test(key)).forEach((key: string) => tutorialDone.add(key));
   if (savedTutorial && typeof savedTutorial.op === 'string' && operationOrder.includes(savedTutorial.op as Operation)) tutorialOp = savedTutorial.op as Operation;
   if (Number.isInteger(savedTutorial?.index) && savedTutorial.index >= 0 && savedTutorial.index < tutorialLessons[tutorialOp].length) tutorialIndex = savedTutorial.index;
 } catch { /* Tutorial progress is optional. */ }
 const tutorialKey = () => `${tutorialOp}:${tutorialIndex}`;
 function saveTutorial() {
-  try { localStorage.setItem('soroban-tutorial-v1', JSON.stringify({ op: tutorialOp, index: tutorialIndex, done: [...tutorialDone] })); } catch { /* Lessons work without storage. */ }
+  try { localStorage.setItem('soroban-tutorial-v2', JSON.stringify({ op: tutorialOp, index: tutorialIndex, done: [...tutorialDone] })); } catch { /* Lessons work without storage. */ }
 }
 function refreshTutorialProgress() {
   tutorialOperations.querySelectorAll<HTMLButtonElement>('.tutorial-operation').forEach((button, index) => {
@@ -889,6 +1003,10 @@ function refreshTutorialProgress() {
   });
 }
 function tutorialValue() { return Number(tutorialDigits.join('')); }
+function countThroughStep(index: number, steps: TutorialStep[]) {
+  for (let i = index; i >= 0; i--) if (steps[i].count !== undefined) return steps[i].count!;
+  return 0;
+}
 function tutorialFinishable() {
   return operationOrder.every((op) => tutorialLessons[op].every((_, index) => tutorialDone.has(`${op}:${index}`) || (op === tutorialOp && index === tutorialIndex)));
 }
@@ -922,41 +1040,68 @@ function renderLessonRack() {
     bead.setAttribute('aria-label', `${operationNames[tutorialOp]} lesson, ${label} on rod ${rod + 1}, ${active ? 'counted' : 'not counted'}`);
   });
   rack.querySelectorAll<HTMLElement>('.lesson-digits span').forEach((digit, index) => { digit.textContent = String(tutorialDigits[index]); });
+
   const value = tutorialValue();
-  const correct = value === lesson.goal;
+  const challenge = lesson.steps[tutorialTryStep];
+  const countCanProgress = !lesson.countGoal || challenge.count === undefined || tutorialCount === challenge.count;
+  const correct = tutorialTryStarted && value === challenge.value && countCanProgress;
+  const demoComplete = !tutorialTryStarted && tutorialStepIndex === lesson.steps.length - 1;
   const passed = tutorialDone.has(tutorialKey());
-  tutorialContent.querySelectorAll<HTMLElement>('.lesson-group').forEach((group, groupIndex) => {
-    group.querySelectorAll<HTMLElement>('i').forEach((dot, dotIndex) => {
-      const each = lesson.groups?.each ?? 0;
-      const groups = lesson.groups?.count ?? 0;
-      const total = tutorialDemoOn
-        ? tutorialOp === 'div' ? Math.min(each, value) * groups : Math.min(groups * each, value)
-        : groups * each;
-      const beadsInGroup = tutorialOp === 'mul'
-        ? Math.max(0, Math.min(each, total - groupIndex * each))
-        : Math.floor(total / Math.max(1, groups)) + (groupIndex < total % Math.max(1, groups) ? 1 : 0);
-      dot.classList.toggle('active', dotIndex < beadsInGroup);
-    });
-  });
   const feedback = tutorialContent.querySelector<HTMLElement>('.lesson-feedback');
   const next = tutorialContent.querySelector<HTMLButtonElement>('.lesson-next');
   if (feedback) {
-    feedback.classList.toggle('success', correct);
-    feedback.textContent = correct ? '✓' : value === lesson.start ? '●' : '↗';
-    feedback.setAttribute('aria-label', correct ? 'Target reached' : 'Keep going');
+    feedback.classList.toggle('success', correct || demoComplete);
+    feedback.textContent = correct || demoComplete ? '✓' : value === lesson.start ? '●' : '↗';
+    feedback.setAttribute('aria-label', correct || demoComplete ? 'Worked total reached' : 'Keep following the place-value steps');
   }
   if (next) {
-    next.disabled = !correct && !passed;
-    const upcoming = nextTutorialLesson();
-    next.textContent = correct || passed ? !upcoming && tutorialFinishable() ? 'Finish' : 'Next' : 'Make the target';
+    next.disabled = false;
+    next.textContent = !tutorialTryStarted
+      ? 'Try it yourself'
+      : correct
+        ? tutorialTryStep + 1 < lesson.steps.length ? 'Next step' : 'Complete lesson'
+        : 'Check step';
+  }
+  const stepCounter = tutorialContent.querySelector<HTMLElement>('.lesson-step-counter');
+  if (stepCounter) stepCounter.textContent = tutorialTryStarted ? `Your turn · step ${tutorialTryStep + 1} of ${lesson.steps.length}` : tutorialStepIndex < 0 ? 'Worked example · before the first step' : `Worked example · step ${tutorialStepIndex + 1} of ${lesson.steps.length}`;
+  const action = tutorialContent.querySelector<HTMLElement>('.lesson-step-action');
+  const why = tutorialContent.querySelector<HTMLElement>('.lesson-step-why');
+  const currentStep = tutorialStepIndex >= 0 ? lesson.steps[tutorialStepIndex] : undefined;
+  const previousValue = tutorialTryStep ? lesson.steps[tutorialTryStep - 1].value : lesson.start;
+  if (action) action.textContent = tutorialTryStarted ? `Your turn: ${challenge.action}` : currentStep?.action ?? `The board starts at ${lesson.start}. Press “Show first step” to see one change at a time.`;
+  if (why) why.textContent = tutorialTryStarted ? tutorialCheckMessage || (lesson.countGoal ? `${lesson.boardRole} Work out this chunk, then update the group counter separately from the remainder.` : `${lesson.boardRole} Work out the new partial total before checking.`) : currentStep?.why ?? lesson.boardRole;
+  const counter = tutorialContent.querySelector<HTMLElement>('.lesson-counter-value');
+  if (counter) counter.textContent = `${tutorialCount} / ${lesson.countGoal ?? 0}`;
+  const countControls = tutorialContent.querySelector<HTMLElement>('.lesson-count-controls');
+  if (countControls) countControls.hidden = !tutorialTryStarted || challenge.count === undefined;
+  const show = tutorialContent.querySelector<HTMLButtonElement>('.lesson-show');
+  if (show) {
+    show.textContent = tutorialStepIndex < 0 ? 'Show first step' : tutorialStepIndex + 1 < lesson.steps.length ? 'Show next step' : 'Replay example';
+    show.hidden = tutorialTryStarted;
   }
   const prompt = tutorialContent.querySelector<HTMLElement>('.lesson-prompt');
-  if (prompt) prompt.textContent = correct ? 'Nice work!' : 'Tap beads toward or away from the bar. Press Show to watch first.';
+  if (prompt) prompt.textContent = tutorialTryStarted
+    ? correct ? tutorialTryStep + 1 < lesson.steps.length ? 'This partial result is right. Press Next step to continue.' : `Exactly. ${lesson.countGoal ? `The remainder is zero and ${tutorialCount} groups were counted.` : 'The board now shows the answer.'}` : tutorialCheckMessage ? 'Adjust the board or group counter, then check again.' : 'Work out this step first, then press Check step. The explanation will help if you get stuck.'
+    : 'Read the explanation before moving on. Each press of Show reveals one deliberate step; it will wait while you read.';
   const progress = tutorialContent.querySelector<HTMLElement>('.lesson-progress');
   if (progress) progress.textContent = `${tutorialIndex + 1} / ${tutorialLessons[tutorialOp].length}`;
+  const equation = tutorialContent.querySelector<HTMLElement>('.lesson-equation');
+  if (equation) {
+    const parts = [...lesson.equation];
+    if (tutorialTryStarted && !(correct && tutorialTryStep === lesson.steps.length - 1) && !passed) parts[parts.length - 1] = '?';
+    if (!tutorialTryStarted && !demoComplete) parts[parts.length - 1] = '?';
+    equation.setAttribute('aria-label', parts.join(' '));
+    equation.innerHTML = parts.map((part) => `<span class="equation-part${['+', '−', '×', '÷', '='].includes(part) ? ' operator' : ''}">${part}</span>`).join('');
+  }
+  if (countControls) {
+    if (tutorialTryStarted && challenge.count !== undefined) {
+      const previousCount = countThroughStep(tutorialTryStep - 1, lesson.steps);
+      const delta = challenge.count - previousCount;
+      countControls.innerHTML = `<button type="button" class="lesson-count-move" data-count="${delta}" ${tutorialCount !== previousCount ? 'disabled' : ''}>Add ${delta} group${delta === 1 ? '' : 's'} to quotient</button><span class="lesson-count-hint">The quotient counts groups removed; the beads separately show the remainder.</span>`;
+    } else countControls.innerHTML = '';
+  }
 }
 function renderTutorial() {
-  stopTutorialDemo();
   tutorialOperations.innerHTML = '';
   operationOrder.forEach((op) => {
     const button = document.createElement('button');
@@ -964,12 +1109,11 @@ function renderTutorial() {
     button.className = `tutorial-operation${op === tutorialOp ? ' selected' : ''}`;
     button.textContent = `${operationNames[op]}${tutorialLessons[op].every((_, index) => tutorialDone.has(`${op}:${index}`)) ? ' ✓' : ''}`;
     button.setAttribute('aria-pressed', String(op === tutorialOp));
-    button.onclick = () => { tutorialOp = op; tutorialIndex = 0; tutorialDigits = String(tutorialLessons[op][0].start).padStart(3, '0').split('').map(Number); saveTutorial(); renderTutorial(); };
+    button.onclick = () => { tutorialOp = op; tutorialIndex = 0; saveTutorial(); renderTutorial(); };
     tutorialOperations.appendChild(button);
   });
   const lesson = tutorialLessons[tutorialOp][tutorialIndex];
   tutorialDigits = String(lesson.start).padStart(3, '0').split('').map(Number);
-  tutorialDemoOn = false;
   tutorialLessonNav = document.createElement('nav');
   tutorialLessonNav.className = 'tutorial-lesson-nav';
   tutorialLessonNav.setAttribute('aria-label', `${operationNames[tutorialOp]} lessons`);
@@ -983,50 +1127,80 @@ function renderTutorial() {
     button.onclick = () => { tutorialIndex = index; saveTutorial(); renderTutorial(); };
     tutorialLessonNav!.appendChild(button);
   });
-  const complete = tutorialDone.has(tutorialKey());
-  tutorialContent.innerHTML = `<div class="lesson-meta"><span class="lesson-progress"></span><span class="lesson-feedback" aria-live="polite"></span></div><h3 class="lesson-title">${lesson.title}</h3><div class="lesson-equation" aria-label="${lesson.equation.join(' ')}">${lesson.equation.map((part) => `<span class="equation-part${['+', '−', '×', '÷', '='].includes(part) ? ' operator' : ''}">${part}</span>`).join('')}</div>${lesson.groups ? `<div class="lesson-groups" aria-label="${lesson.groups.count} equal groups of ${lesson.groups.each}">${Array.from({ length: lesson.groups.count }, () => `<div class="lesson-group">${Array.from({ length: Math.min(lesson.groups!.each, 10) }, () => '<i></i>').join('')}</div>`).join('')}</div>` : `<div class="lesson-moves" aria-label="${lesson.moves!.join(', ')}">${lesson.moves!.map((move) => `<span class="move-chip">${move}</span>`).join('')}</div>`}<div class="lesson-target"><span>Make</span><strong>${lesson.goal}</strong></div><p class="lesson-prompt">Tap beads toward or away from the bar. Press Show to watch first.</p><div class="lesson-legend" aria-label="Abacus bead values"><span><i class="legend-five"></i>5</span><span><i class="legend-one"></i>1</span></div><div class="lesson-rack"></div><div class="lesson-controls"><button type="button" class="lesson-reset" aria-label="Reset lesson">↺</button><button type="button" class="lesson-show">▶ Show</button><button type="button" class="primary lesson-next" ${complete ? '' : 'disabled'}>${complete ? 'Next' : 'Make the target'}</button></div>`;
+  tutorialStepIndex = -1;
+  tutorialTryStarted = false;
+  tutorialTryStep = 0;
+  tutorialCount = 0;
+  tutorialCheckMessage = '';
+  tutorialContent.innerHTML = `<div class="lesson-meta"><span class="lesson-progress"></span><span class="lesson-feedback" aria-live="polite"></span></div><h3 class="lesson-title">${lesson.title}</h3><div class="lesson-equation" aria-label="${lesson.equation.join(' ')}"></div><p class="lesson-story">${lesson.story}</p><p class="lesson-board-role"><strong>What the board tracks:</strong> ${lesson.boardRole}</p><div class="lesson-step-card"><p class="lesson-step-counter"></p><p class="lesson-step-action"></p><p class="lesson-step-why"></p></div>${lesson.countGoal ? `<div class="lesson-counter"><span>${lesson.countLabel}: <strong class="lesson-counter-value">0 / ${lesson.countGoal}</strong></span><div class="lesson-count-controls" hidden></div></div>` : ''}<p class="lesson-prompt"></p><div class="lesson-legend" aria-label="Abacus bead values"><span><i class="legend-five"></i>5</span><span><i class="legend-one"></i>1</span></div><div class="lesson-rack"></div><div class="lesson-controls"><button type="button" class="lesson-reset" aria-label="Reset lesson">↺</button><button type="button" class="lesson-show">Show first step</button><button type="button" class="primary lesson-next">Try it yourself</button></div>`;
+  tutorialDigits = String(lesson.start).padStart(3, '0').split('').map(Number);
   renderLessonRack();
   tutorialContent.querySelector<HTMLButtonElement>('.lesson-reset')!.onclick = () => {
-    stopTutorialDemo();
-    tutorialDone.delete(tutorialKey());
+    tutorialStepIndex = -1;
+    tutorialTryStarted = false;
+    tutorialTryStep = 0;
+    tutorialCount = 0;
+    tutorialCheckMessage = '';
     tutorialDigits = String(lesson.start).padStart(3, '0').split('').map(Number);
+    tutorialDone.delete(tutorialKey());
     saveTutorial();
-    renderLessonRack();
     refreshTutorialProgress();
+    renderLessonRack();
   };
   tutorialContent.querySelector<HTMLButtonElement>('.lesson-show')!.onclick = showTutorialDemo;
   tutorialContent.querySelector<HTMLButtonElement>('.lesson-next')!.onclick = advanceTutorial;
   tutorialContent.prepend(tutorialLessonNav!);
 }
 function showTutorialDemo() {
-  stopTutorialDemo();
   const lesson = tutorialLessons[tutorialOp][tutorialIndex];
-  tutorialDigits = String(lesson.start).padStart(3, '0').split('').map(Number);
-  tutorialDemoOn = true;
-  let frame = 0;
-  const showFrame = () => {
-    tutorialDigits = String(lesson.demo[frame]).padStart(3, '0').split('').map(Number);
-    renderLessonRack();
-    frame++;
-    if (frame < lesson.demo.length) demoTimer = setTimeout(showFrame, 650);
-    else demoTimer = setTimeout(() => {
-      tutorialDigits = String(lesson.start).padStart(3, '0').split('').map(Number);
-      tutorialDemoOn = false;
-      renderLessonRack();
-      demoTimer = null;
-    }, 900);
-  };
-  showFrame();
+  if (tutorialTryStarted) return;
+  tutorialStepIndex = tutorialStepIndex + 1 >= lesson.steps.length ? 0 : tutorialStepIndex + 1;
+  const step = lesson.steps[tutorialStepIndex];
+  tutorialDigits = String(step.value).padStart(3, '0').split('').map(Number);
+  tutorialCount = countThroughStep(tutorialStepIndex, lesson.steps);
+  renderLessonRack();
 }
 function renderTutorialComplete() {
-  stopTutorialDemo();
   tutorialLessonNav = null;
   tutorialContent.innerHTML = `<div class="lesson-complete"><h3 class="lesson-title">You did it!</h3><div class="lesson-badges">${operationOrder.map((op) => `<span class="lesson-badge${tutorialLessons[op].every((_, index) => tutorialDone.has(`${op}:${index}`)) ? ' done' : ''}" aria-label="${operationNames[op]}">${{ add: '+', sub: '−', mul: '×', div: '÷' }[op]}</span>`).join('')}</div><div class="lesson-equation">${['+', '−', '×', '÷'].map((symbol) => `<span class="equation-part operator">${symbol}</span>`).join('')}</div><button type="button" class="lesson-review">Back to lessons</button></div>`;
   tutorialContent.querySelector<HTMLButtonElement>('.lesson-review')!.onclick = () => { tutorialOp = 'add'; tutorialIndex = 0; saveTutorial(); renderTutorial(); };
 }
 function advanceTutorial() {
-  if (tutorialValue() !== tutorialLessons[tutorialOp][tutorialIndex].goal && !tutorialDone.has(tutorialKey())) return;
+  const lesson = tutorialLessons[tutorialOp][tutorialIndex];
+  if (!tutorialTryStarted) {
+    tutorialTryStarted = true;
+    tutorialTryStep = 0;
+    tutorialStepIndex = -1;
+    tutorialCount = 0;
+    tutorialCheckMessage = '';
+    tutorialDigits = String(lesson.start).padStart(3, '0').split('').map(Number);
+    renderLessonRack();
+    return;
+  }
+  const challenge = lesson.steps[tutorialTryStep];
+  const countCanProgress = !lesson.countGoal || challenge.count === undefined || tutorialCount === challenge.count;
+  const correct = tutorialValue() === challenge.value && countCanProgress;
+  if (!correct && !tutorialDone.has(tutorialKey())) {
+    tutorialCheckMessage = lesson.countGoal && tutorialCount !== (challenge.count ?? 0)
+      ? `The remainder is ${tutorialValue()}; the group count is ${tutorialCount}. This step needs ${challenge.count} groups counted.`
+      : `The board shows ${tutorialValue()}, but this step should leave ${challenge.value}. Recheck the place-value chunk and bead values.`;
+    renderLessonRack();
+    return;
+  }
+  tutorialCheckMessage = '';
+  if (correct && tutorialTryStep + 1 < lesson.steps.length) {
+    tutorialTryStep++;
+    const previous = lesson.steps[tutorialTryStep - 1];
+    tutorialDigits = String(previous.value).padStart(3, '0').split('').map(Number);
+    tutorialCount = countThroughStep(tutorialTryStep - 1, lesson.steps);
+    tutorialStepIndex = tutorialTryStep - 1;
+    renderLessonRack();
+    return;
+  }
   tutorialDone.add(tutorialKey());
+  tutorialTryStarted = false;
+  tutorialTryStep = 0;
+  tutorialCount = 0;
   saveTutorial();
   refreshTutorialProgress();
   const current = tutorialIndex + 1;
@@ -1040,10 +1214,18 @@ function advanceTutorial() {
   renderTutorial();
 }
 tutorialContent.addEventListener('click', (event) => {
-  const target = (event.target as HTMLElement).closest<HTMLButtonElement>('.lesson-bead');
-  if (!target) return;
-  stopTutorialDemo();
-  tutorialDemoOn = false;
+  const element = event.target as HTMLElement;
+  const countButton = element.closest<HTMLButtonElement>('.lesson-count-move');
+  if (countButton && tutorialTryStarted) {
+    const challenge = tutorialLessons[tutorialOp][tutorialIndex].steps[tutorialTryStep];
+    tutorialCount += Number(countButton.dataset.count);
+    tutorialCheckMessage = '';
+    renderLessonRack();
+    tutorialContent.querySelector<HTMLButtonElement>('.lesson-count-move')?.focus({ preventScroll: true });
+    return;
+  }
+  const target = element.closest<HTMLButtonElement>('.lesson-bead');
+  if (!target || !tutorialTryStarted) return;
   const rod = Number(target.dataset.rod), index = Number(target.dataset.index);
   const value = tutorialDigits[rod];
   if (target.dataset.deck === 'upper') tutorialDigits[rod] += value >= 5 ? -5 : 5;
@@ -1051,7 +1233,7 @@ tutorialContent.addEventListener('click', (event) => {
     const low = value % 5;
     tutorialDigits[rod] = Math.floor(value / 5) * 5 + (index < low ? index : index + 1);
   }
-  tutorialDone.delete(tutorialKey());
+  tutorialCheckMessage = '';
   saveTutorial();
   refreshTutorialProgress();
   renderLessonRack();
@@ -1064,7 +1246,6 @@ function openTutorial() {
 }
 ($('open-tutorial') as HTMLButtonElement).onclick = openTutorial;
 ($('close-tutorial') as HTMLButtonElement).onclick = () => tutorial.close();
-tutorial.addEventListener('close', stopTutorialDemo);
 
 // --- Worksheet --------------------------------------------------------------
 // A sheet of problems to work on a soroban of your own. Nothing here is graded
