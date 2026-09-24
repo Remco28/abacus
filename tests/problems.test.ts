@@ -2,14 +2,14 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   addMove, subMove, movesFor, answerOf, runningTotals, generate, generateSet, sheetSize, problemLines, describe, fitsStep,
-  MOVE_STEPS, MUL_STEPS, MOVE_STEP_COUNT, MUL_STEP_COUNT, moveStepLabel, mulStepLabel,
+  MOVE_STEPS, MUL_STEPS, DIV_STEPS, MOVE_STEP_COUNT, MUL_STEP_COUNT, DIV_STEP_COUNT, moveStepLabel, mulStepLabel, divStepLabel, fitsDivision,
   CAPACITY, MULTI_ROW, PLACES, TEST_ONES, SIGN, type Operation,
 } from '../src/problems';
 
 // A small deterministic generator, so a failing case can be reproduced by seed.
 const seeded = (seed: number) => () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
 const digits = (n: number) => String(n).length;
-const levels = (move: number, mul: number) => ({ move, mul });
+const levels = (move: number, mul: number, div = 1) => ({ move, mul, div });
 
 test('the classifier names the documented complement moves', () => {
   assert.equal(addMove(2, 2), 'direct'); // The beads are simply there.
@@ -37,6 +37,8 @@ test('answers and running totals come out of the operands', () => {
   assert.equal(answerOf('add', [8, 7, 4]), 19);
   assert.equal(answerOf('sub', [23, 7]), 16);
   assert.equal(answerOf('mul', [23, 47]), 1081);
+  assert.equal(answerOf('div', [1081, 23]), 47);
+  assert.equal(answerOf('div', [25, 4]), 6.25, 'the arithmetic helper can describe non-exact division too');
   assert.deepEqual(runningTotals('sub', [23, 7, 5]), [23, 16, 11]);
   // Only adding and taking away have steps, so a partial product is not a NaN.
   assert.deepEqual(runningTotals('mul', [23, 47]), []);
@@ -86,6 +88,32 @@ test('every rung of the multiplying ladder uses the widths it names', () => {
   }
 });
 
+test('exact division rungs generate whole quotients within the named ranges', () => {
+  for (let rung = 1; rung <= DIV_STEP_COUNT; rung++) {
+    const step = DIV_STEPS[rung - 1];
+    for (let i = 0; i < 60; i++) {
+      const problem = generate(['div'], levels(1, 1, rung), seeded(i * 43 + rung * 11));
+      const [dividend, divisor] = problem.operands;
+      assert.equal(problem.op, 'div');
+      assert.equal(problem.answer, dividend / divisor);
+      assert.ok(Number.isInteger(problem.answer), `${describe(problem)} should have a whole quotient`);
+      assert.ok(dividend <= CAPACITY, `${describe(problem)} leaves the board`);
+      assert.ok(fitsDivision(problem.operands, rung), `${describe(problem)} does not belong on ${step.name}`);
+    }
+  }
+  assert.equal(fitsDivision([25, 4], 1), false, 'remainders are not introduced');
+  assert.equal(fitsDivision([24, 4], 1), true);
+  assert.equal(fitsDivision([999_999, 0], 1), false, 'zero cannot be a divisor');
+  assert.equal(fitsDivision([999_999, 1000], 1), false, 'divisors cannot exceed board capacity');
+  assert.equal(fitsDivision([998_001, 999], DIV_STEP_COUNT), true, 'large exact divisions fit the six-rod range');
+  assert.match(divStepLabel(999), /three-digit divisors/, 'rungs clamp at the last division skill');
+  for (const rung of [0, -3, 999]) {
+    const problem = generate(['div'], levels(1, 1, rung), seeded(rung + 6));
+    assert.ok(Number.isInteger(problem.answer) && problem.answer > 0 && problem.answer <= CAPACITY, describe(problem));
+    assert.ok(fitsDivision(problem.operands, rung), `${describe(problem)} stays within the clamped division rung`);
+  }
+});
+
 test('the top of each ladder is the hardest thing six rods hold', () => {
   assert.equal(TEST_ONES, PLACES - 1, 'no rod is spent on fractions while testing');
   assert.equal(CAPACITY, 999999, 'six rods of whole numbers');
@@ -97,8 +125,11 @@ test('the top of each ladder is the hardest thing six rods hold', () => {
 
 test('generation stays inside the operations that were asked for', () => {
   const seen = new Set<Operation>();
-  for (let i = 0; i < 60; i++) seen.add(generate(['add', 'mul'], levels(2, 2), seeded(i + 99)).op);
-  assert.deepEqual([...seen].sort(), ['add', 'mul']);
+  for (let i = 0; i < 90; i++) seen.add(generate(['add', 'mul', 'div'], levels(2, 2, 2), seeded(i + 99)).op);
+  assert.deepEqual([...seen].sort(), ['add', 'div', 'mul']);
+  const four = new Set<Operation>();
+  for (let i = 0; i < 140; i++) four.add(generate(['add', 'sub', 'mul', 'div'], levels(2, 2, 2), seeded(i + 500)).op);
+  assert.deepEqual([...four].sort(), ['add', 'div', 'mul', 'sub']);
   assert.equal(generate([], levels(1, 1), seeded(1)).op, 'add'); // No selection still gives a problem.
 });
 
@@ -109,6 +140,7 @@ test('an out-of-range rung falls back to one that exists', () => {
   }
   assert.match(moveStepLabel(999), /ten rows/, 'a rung number past the end means the last one');
   assert.match(mulStepLabel(0), /^1 · 1 × 1$/, 'and below the start means the first');
+  assert.match(divStepLabel(0), /^1 · one-digit groups$/, 'division also clamps to its first rung');
 });
 
 test('a sheet never repeats a problem and stays on its rung', () => {
@@ -123,6 +155,15 @@ test('a sheet never repeats a problem and stays on its rung', () => {
         assert.equal(problem.op, op);
         assert.ok(fitsStep(op, problem.operands, step), `${describe(problem)} does not belong on ${step.name}`);
       }
+    }
+  }
+  for (let rung = 1; rung <= DIV_STEP_COUNT; rung++) {
+    const sheet = generateSet(['div'], levels(1, 1, rung), seeded(rung * 251));
+    assert.ok(sheet.length > 0, `${DIV_STEPS[rung - 1].name} produced an empty sheet`);
+    assert.equal(new Set(sheet.map(describe)).size, sheet.length, `${DIV_STEPS[rung - 1].name} wrote the same problem twice`);
+    for (const problem of sheet) {
+      assert.equal(problem.op, 'div');
+      assert.ok(fitsDivision(problem.operands, rung), `${describe(problem)} does not belong on ${DIV_STEPS[rung - 1].name}`);
     }
   }
   for (let rung = 1; rung <= MUL_STEP_COUNT; rung++) {
@@ -153,16 +194,24 @@ test('a sheet is sized to its rung, and the tightest rung just comes up short', 
 test('a mixed sheet is only as long as its shortest rung can fill', () => {
   const both = sheetSize(['add', 'mul'], levels(MOVE_STEP_COUNT, MUL_STEP_COUNT));
   assert.equal(both, Math.min(MOVE_STEPS[MOVE_STEP_COUNT - 1].sheet, MUL_STEPS[MUL_STEP_COUNT - 1].sheet), 'the tightest rung decides');
+  assert.equal(sheetSize(['div'], levels(1, 1, DIV_STEP_COUNT)), DIV_STEPS[DIV_STEP_COUNT - 1].sheet, 'division sheets follow their own rung size');
+  const divisionSheet = generateSet(['div'], levels(1, 1, 1), seeded(78));
+  assert.ok(divisionSheet.every((problem) => problem.op === 'div' && problem.operands[0] / problem.operands[1] === problem.answer), 'division sheets contain exact divisions');
   assert.equal(sheetSize([], levels(1, 1)), MOVE_STEPS[0].sheet, 'no selection still asks for a sheet');
   const sheet = generateSet(['add', 'mul'], levels(2, 1), seeded(3));
   assert.ok(sheet.every((problem) => problem.op === 'add' || problem.op === 'mul'), 'a mixed sheet draws from what was chosen');
+  const withDivision = generateSet(['add', 'div'], levels(1, 1, 1), seeded(42));
+  assert.ok(withDivision.every((problem) => problem.op === 'add' || problem.op === 'div'), 'mixed division sheets draw only selected operations');
+  assert.ok(withDivision.filter((problem) => problem.op === 'div').every((problem) => problem.operands[0] / problem.operands[1] === problem.answer), 'mixed sheets preserve exact quotients');
 });
 
 test('a problem reads like the written column', () => {
   const add = { op: 'add' as const, operands: [847, 296, 61], answer: 1204 };
   const sub = { op: 'sub' as const, operands: [23, 7], answer: 16 };
+  const div = { op: 'div' as const, operands: [24, 4], answer: 6 };
   assert.deepEqual(problemLines(add), ['847', `${SIGN.add} 296`, `${SIGN.add} 61`]);
   assert.deepEqual(problemLines(sub), ['23', `${SIGN.sub} 7`]);
+  assert.deepEqual(problemLines(div), ['24', `${SIGN.div} 4`]);
   assert.equal(describe(sub), `23 ${SIGN.sub} 7`);
 });
 
@@ -172,5 +221,8 @@ test('every rung of both ladders has a label', () => {
   }
   for (let rung = 1; rung <= MUL_STEP_COUNT; rung++) {
     assert.ok(mulStepLabel(rung).includes(MUL_STEPS[rung - 1].name), mulStepLabel(rung));
+  }
+  for (let rung = 1; rung <= DIV_STEP_COUNT; rung++) {
+    assert.ok(divStepLabel(rung).includes(DIV_STEPS[rung - 1].name), divStepLabel(rung));
   }
 });

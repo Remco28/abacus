@@ -1,6 +1,6 @@
 import './style.css';
 import { COLUMNS, SIZE, UPPER, LOWER, createBoard, digit, formatValue, placeName, moveBead, step, ShakeDetector } from './model';
-import { CAPACITY, MOVE_STEP_COUNT, MUL_STEP_COUNT, TEST_ONES, describe as describeProblem, generate, generateSet, moveStepLabel, mulStepLabel, problemLines, type Levels, type Operation, type Problem } from './problems';
+import { CAPACITY, MOVE_STEP_COUNT, MUL_STEP_COUNT, DIV_STEP_COUNT, TEST_ONES, describe as describeProblem, generate, generateSet, moveStepLabel, mulStepLabel, divStepLabel, problemLines, type Levels, type Operation, type Problem } from './problems';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const svg = document.getElementById('board') as unknown as SVGSVGElement;
@@ -15,7 +15,7 @@ type Verdict = 'none' | 'right' | 'wrong' | 'revealed';
 // it, or -1 for nowhere. It lives here rather than on the Problem because it is
 // where they got to, not something the generator has any business knowing.
 type TestState = { on: boolean; ops: Operation[]; levels: Levels; problem: Problem | null; onesBefore: number; verdict: Verdict; step: number };
-let test: TestState = { on: false, ops: ['add'], levels: { move: 1, mul: 1 }, problem: null, onesBefore: 3, verdict: 'none', step: -1 };
+let test: TestState = { on: false, ops: ['add'], levels: { move: 1, mul: 1, div: 1 }, problem: null, onesBefore: 3, verdict: 'none', step: -1 };
 // The worksheet: a set of problems for working on a soroban of your own rather
 // than the one on screen. It reads the same rungs, but it never touches the
 // board, which is what keeps it out from behind test mode.
@@ -705,39 +705,44 @@ function applyTestUi() {
   ($('problem') as HTMLButtonElement).hidden = !test.on;
   ($('submit') as HTMLButtonElement).hidden = !test.on;
   ($('decimal-lock') as HTMLButtonElement).hidden = test.on;
-  for (const [id, op] of [['op-add', 'add'], ['op-sub', 'sub'], ['op-mul', 'mul']] as Array<[string, Operation]>) {
+  for (const [id, op] of [['op-add', 'add'], ['op-sub', 'sub'], ['op-mul', 'mul'], ['op-div', 'div']] as Array<[string, Operation]>) {
     $(id).setAttribute('aria-pressed', String(test.ops.includes(op)));
   }
   // Before the rungs are filled there is nothing to select, which is why the
   // value is set only when the options exist.
   const moveSelect = $('move-level') as HTMLSelectElement;
   const mulSelect = $('mul-level') as HTMLSelectElement;
+  const divSelect = $('div-level') as HTMLSelectElement;
   if (moveSelect.options.length) moveSelect.value = String(test.levels.move);
   if (mulSelect.options.length) mulSelect.value = String(test.levels.mul);
+  if (divSelect.options.length) divSelect.value = String(test.levels.div);
   // Only the ladders actually in play are on offer.
-  ($('move-level-row') as HTMLElement).hidden = !test.ops.some((op) => op !== 'mul');
+  ($('move-level-row') as HTMLElement).hidden = !test.ops.some((op) => op === 'add' || op === 'sub');
   ($('mul-level-row') as HTMLElement).hidden = !test.ops.includes('mul');
+  ($('div-level-row') as HTMLElement).hidden = !test.ops.includes('div');
 }
 
 function isProblem(value: unknown): value is Problem {
   const problem = value as Problem | null;
-  return !!problem && ['add', 'sub', 'mul'].includes(problem.op) && Array.isArray(problem.operands)
+  return !!problem && ['add', 'sub', 'mul', 'div'].includes(problem.op) && Array.isArray(problem.operands)
     && problem.operands.length > 1 && problem.operands.every((n) => Number.isInteger(n) && n > 0 && n <= CAPACITY)
-    && Number.isInteger(problem.answer) && problem.answer >= 0 && problem.answer <= CAPACITY;
+    && Number.isInteger(problem.answer) && problem.answer >= 0 && problem.answer <= CAPACITY
+    && (problem.op !== 'div' || (problem.operands.length === 2 && problem.operands[1] >= 2 && problem.operands[0] % problem.operands[1] === 0 && problem.operands[0] / problem.operands[1] === problem.answer));
 }
 
 function restoreTest(raw: unknown) {
   if (!raw || typeof raw !== 'object') return;
   const saved = raw as Partial<SavedTest>;
-  const ops = Array.isArray(saved.ops) ? saved.ops.filter((op): op is Operation => op === 'add' || op === 'sub' || op === 'mul') : [];
+  const ops = Array.isArray(saved.ops) ? saved.ops.filter((op): op is Operation => op === 'add' || op === 'sub' || op === 'mul' || op === 'div') : [];
   if (ops.length) test.ops = ops;
   const rungs = saved.levels;
   if (rungs) {
     if (rungIn(rungs.move, MOVE_STEP_COUNT)) test.levels.move = rungs.move;
     if (rungIn(rungs.mul, MUL_STEP_COUNT)) test.levels.mul = rungs.mul;
+    if (rungIn(rungs.div, DIV_STEP_COUNT)) test.levels.div = rungs.div;
   }
   if (Number.isInteger(saved.onesBefore) && saved.onesBefore! >= 0 && saved.onesBefore! < COLUMNS) test.onesBefore = saved.onesBefore!;
-  if (isProblem(saved.problem)) test.problem = saved.problem;
+  if (isProblem(saved.problem) && (!ops.length || ops.includes(saved.problem.op))) test.problem = saved.problem;
   const rows = test.problem?.operands.length ?? 0;
   if (Number.isInteger(saved.step) && saved.step! >= 0 && saved.step! < rows) test.step = saved.step!;
   if (!saved.on) return;
@@ -748,8 +753,8 @@ function restoreTest(raw: unknown) {
   applyTestUi();
 }
 
-// Two ladders, because one is not a scale: adding and taking away is graded by
-// the bead movement a step needs, and multiplying by the width of its operands.
+// Separate ladders because the skills are different: adding and taking away
+// by bead movement, multiplying by operand width, and division by group size.
 function fillRungs(id: string, count: number, label: (rung: number) => string): HTMLSelectElement {
   const select = $(id) as HTMLSelectElement;
   for (let rung = 1; rung <= count; rung++) {
@@ -763,15 +768,40 @@ function fillRungs(id: string, count: number, label: (rung: number) => string): 
 }
 const moveLevel = fillRungs('move-level', MOVE_STEP_COUNT, moveStepLabel);
 const mulLevel = fillRungs('mul-level', MUL_STEP_COUNT, mulStepLabel);
-moveLevel.onchange = () => { test.levels.move = Number(moveLevel.value); if (test.on) newProblem(); save(); };
-mulLevel.onchange = () => { test.levels.mul = Number(mulLevel.value); if (test.on) newProblem(); save(); };
+const divLevel = fillRungs('div-level', DIV_STEP_COUNT, divStepLabel);
+function levelChanged(affectsProblem: boolean) {
+  if (test.on) newProblem();
+  else if (affectsProblem && test.problem) {
+    test.problem = null;
+    test.verdict = 'none';
+    test.step = -1;
+    save();
+  } else save();
+}
+moveLevel.onchange = () => {
+  test.levels.move = Number(moveLevel.value);
+  levelChanged(test.problem?.op === 'add' || test.problem?.op === 'sub');
+};
+mulLevel.onchange = () => {
+  test.levels.mul = Number(mulLevel.value);
+  levelChanged(test.problem?.op === 'mul');
+};
+divLevel.onchange = () => {
+  test.levels.div = Number(divLevel.value);
+  levelChanged(test.problem?.op === 'div');
+};
 ($('test-mode') as HTMLButtonElement).onclick = () => setTestMode(!test.on);
-for (const [id, op] of [['op-add', 'add'], ['op-sub', 'sub'], ['op-mul', 'mul']] as Array<[string, Operation]>) {
+for (const [id, op] of [['op-add', 'add'], ['op-sub', 'sub'], ['op-mul', 'mul'], ['op-div', 'div']] as Array<[string, Operation]>) {
   ($(id) as HTMLButtonElement).onclick = () => {
     const off = test.ops.includes(op);
     if (off && test.ops.length === 1) { status('Test mode needs at least one operation.'); return; }
     test.ops = off ? test.ops.filter((each) => each !== op) : [...test.ops, op];
     if (test.on) newProblem();
+    else if (test.problem && !test.ops.includes(test.problem.op)) {
+      test.problem = null;
+      test.verdict = 'none';
+      test.step = -1;
+    }
     applyTestUi();
     save();
   };
@@ -788,6 +818,254 @@ $('close-settings').onclick = () => settings.close();
 $('show-welcome').onclick = () => { settings.close(); welcome.showModal(); };
 $('start').onclick = () => welcome.close();
 welcome.addEventListener('close', () => { try { localStorage.setItem('soroban-welcomed', '1'); } catch { /* Optional first-visit memory. */ } });
+
+// --- Visual tutorial --------------------------------------------------------
+// The lesson board is separate from the working board: children can explore
+// freely without losing the number already on their soroban. Every challenge is
+// a bead move, with the arithmetic shown as a diagram rather than a lecture.
+type TutorialLesson = {
+  title: string;
+  start: number;
+  goal: number;
+  equation: string[];
+  moves?: string[];
+  demo: number[];
+  groups?: { count: number; each: number };
+};
+const tutorialLessons: Record<Operation, TutorialLesson[]> = {
+  add: [
+    { title: 'Make a number', start: 0, goal: 4, equation: ['4'], moves: ['+4'], demo: [0, 4] },
+    { title: 'The 5 friend', start: 4, goal: 7, equation: ['4', '+', '3', '=', '7'], moves: ['+5', '−2'], demo: [4, 9, 7] },
+    { title: 'Make a ten', start: 8, goal: 15, equation: ['8', '+', '7', '=', '15'], moves: ['+10', '−3'], demo: [8, 18, 15] },
+  ],
+  sub: [
+    { title: 'Take away', start: 7, goal: 5, equation: ['7', '−', '2', '=', '5'], moves: ['−2'], demo: [7, 5] },
+    { title: 'The 5 friend', start: 6, goal: 4, equation: ['6', '−', '2', '=', '4'], moves: ['+3', '−5'], demo: [6, 9, 4] },
+    { title: 'Borrow a ten', start: 12, goal: 5, equation: ['12', '−', '7', '=', '5'], moves: ['−10', '+3'], demo: [12, 2, 5] },
+  ],
+  mul: [
+    { title: 'Equal groups', start: 0, goal: 12, equation: ['3', '×', '4', '=', '12'], groups: { count: 3, each: 4 }, demo: [0, 4, 8, 12] },
+    { title: 'Build the product', start: 0, goal: 24, equation: ['6', '×', '4', '=', '24'], groups: { count: 6, each: 4 }, demo: [0, 4, 8, 12, 16, 20, 24] },
+  ],
+  div: [
+    { title: 'Share equally', start: 0, goal: 4, equation: ['12', '÷', '3', '=', '?'], groups: { count: 3, each: 4 }, demo: [0, 1, 2, 3, 4] },
+    { title: 'Find each share', start: 0, goal: 8, equation: ['24', '÷', '3', '=', '?'], groups: { count: 3, each: 8 }, demo: [0, 2, 4, 6, 8] },
+  ],
+};
+const operationNames: Record<Operation, string> = { add: 'Add', sub: 'Subtract', mul: 'Multiply', div: 'Divide' };
+const operationOrder: Operation[] = ['add', 'sub', 'mul', 'div'];
+const tutorial = $('tutorial-dialog') as HTMLDialogElement;
+const tutorialContent = $('tutorial-content');
+const tutorialOperations = $('tutorial-operations');
+const tutorialDone = new Set<string>();
+let tutorialLessonNav: HTMLElement | null = null;
+let tutorialOp: Operation = 'add';
+let tutorialIndex = 0;
+let tutorialDigits = [0, 0, 0];
+let demoTimer: ReturnType<typeof setTimeout> | null = null;
+let tutorialDemoOn = false;
+function stopTutorialDemo() {
+  if (demoTimer !== null) clearTimeout(demoTimer);
+  demoTimer = null;
+  tutorialDemoOn = false;
+}
+try {
+  const savedTutorial = JSON.parse(localStorage.getItem('soroban-tutorial-v1') || 'null');
+  if (savedTutorial && Array.isArray(savedTutorial.done)) savedTutorial.done.filter((key: unknown): key is string => typeof key === 'string' && /^(add|sub|mul|div):\d+$/.test(key)).forEach((key: string) => tutorialDone.add(key));
+  if (savedTutorial && typeof savedTutorial.op === 'string' && operationOrder.includes(savedTutorial.op as Operation)) tutorialOp = savedTutorial.op as Operation;
+  if (Number.isInteger(savedTutorial?.index) && savedTutorial.index >= 0 && savedTutorial.index < tutorialLessons[tutorialOp].length) tutorialIndex = savedTutorial.index;
+} catch { /* Tutorial progress is optional. */ }
+const tutorialKey = () => `${tutorialOp}:${tutorialIndex}`;
+function saveTutorial() {
+  try { localStorage.setItem('soroban-tutorial-v1', JSON.stringify({ op: tutorialOp, index: tutorialIndex, done: [...tutorialDone] })); } catch { /* Lessons work without storage. */ }
+}
+function refreshTutorialProgress() {
+  tutorialOperations.querySelectorAll<HTMLButtonElement>('.tutorial-operation').forEach((button, index) => {
+    const op = operationOrder[index];
+    button.textContent = `${operationNames[op]}${tutorialLessons[op].every((_, lesson) => tutorialDone.has(`${op}:${lesson}`)) ? ' ✓' : ''}`;
+  });
+  tutorialLessonNav?.querySelectorAll<HTMLButtonElement>('.lesson-number').forEach((button, index) => {
+    button.textContent = `${index + 1}${tutorialDone.has(`${tutorialOp}:${index}`) ? ' ✓' : ''}`;
+  });
+}
+function tutorialValue() { return Number(tutorialDigits.join('')); }
+function tutorialFinishable() {
+  return operationOrder.every((op) => tutorialLessons[op].every((_, index) => tutorialDone.has(`${op}:${index}`) || (op === tutorialOp && index === tutorialIndex)));
+}
+function nextTutorialLesson(): { op: Operation; index: number } | undefined {
+  const lessons = operationOrder.flatMap((op) => tutorialLessons[op].map((_, index) => ({ op, index })));
+  const current = lessons.findIndex(({ op, index }) => op === tutorialOp && index === tutorialIndex);
+  for (let offset = 1; offset < lessons.length; offset++) {
+    const candidate = lessons[(current + offset) % lessons.length];
+    if (!tutorialDone.has(`${candidate.op}:${candidate.index}`)) return candidate;
+  }
+  return undefined;
+}
+function miniBead(rod: number, deck: 'upper' | 'lower', index: number, active: boolean) {
+  const label = deck === 'upper' ? 'five' : `one ${index + 1}`;
+  return `<button type="button" class="lesson-bead ${deck}${active ? ' active' : ''}" data-rod="${rod}" data-deck="${deck}" data-index="${index}" aria-label="${operationNames[tutorialOp]} lesson, ${label} bead on rod ${rod + 1}${active ? ', counted' : ', not counted'}" aria-pressed="${active}"></button>`;
+}
+function renderLessonRack() {
+  const lesson = tutorialLessons[tutorialOp][tutorialIndex];
+  const rack = tutorialContent.querySelector<HTMLElement>('.lesson-rack');
+  if (!rack) return;
+  if (!rack.querySelector('.lesson-abacus')) {
+    rack.innerHTML = `<div class="lesson-abacus" role="group" aria-label="Practice abacus"><div class="lesson-place-row"><span>100s</span><span>10s</span><span>1s</span></div><div class="lesson-upper-row">${tutorialDigits.map((value, rod) => miniBead(rod, 'upper', 0, value >= 5)).join('')}</div><div class="lesson-bar" aria-hidden="true"></div>${[0, 1, 2, 3].map((index) => `<div class="lesson-lower-row">${tutorialDigits.map((value, rod) => miniBead(rod, 'lower', index, index < value % 5)).join('')}</div>`).join('')}<div class="lesson-digits">${tutorialDigits.join('').split('').map((digit) => `<span>${digit}</span>`).join('')}</div></div>`;
+  }
+  rack.querySelectorAll<HTMLButtonElement>('.lesson-bead').forEach((bead) => {
+    const rod = Number(bead.dataset.rod), index = Number(bead.dataset.index);
+    const deck = bead.dataset.deck as 'upper' | 'lower';
+    const active = deck === 'upper' ? tutorialDigits[rod] >= 5 : index < tutorialDigits[rod] % 5;
+    const label = deck === 'upper' ? 'five bead' : `one bead ${index + 1}`;
+    bead.classList.toggle('active', active);
+    bead.setAttribute('aria-pressed', String(active));
+    bead.setAttribute('aria-label', `${operationNames[tutorialOp]} lesson, ${label} on rod ${rod + 1}, ${active ? 'counted' : 'not counted'}`);
+  });
+  rack.querySelectorAll<HTMLElement>('.lesson-digits span').forEach((digit, index) => { digit.textContent = String(tutorialDigits[index]); });
+  const value = tutorialValue();
+  const correct = value === lesson.goal;
+  const passed = tutorialDone.has(tutorialKey());
+  tutorialContent.querySelectorAll<HTMLElement>('.lesson-group').forEach((group, groupIndex) => {
+    group.querySelectorAll<HTMLElement>('i').forEach((dot, dotIndex) => {
+      const each = lesson.groups?.each ?? 0;
+      const groups = lesson.groups?.count ?? 0;
+      const total = tutorialDemoOn
+        ? tutorialOp === 'div' ? Math.min(each, value) * groups : Math.min(groups * each, value)
+        : groups * each;
+      const beadsInGroup = tutorialOp === 'mul'
+        ? Math.max(0, Math.min(each, total - groupIndex * each))
+        : Math.floor(total / Math.max(1, groups)) + (groupIndex < total % Math.max(1, groups) ? 1 : 0);
+      dot.classList.toggle('active', dotIndex < beadsInGroup);
+    });
+  });
+  const feedback = tutorialContent.querySelector<HTMLElement>('.lesson-feedback');
+  const next = tutorialContent.querySelector<HTMLButtonElement>('.lesson-next');
+  if (feedback) {
+    feedback.classList.toggle('success', correct);
+    feedback.textContent = correct ? '✓' : value === lesson.start ? '●' : '↗';
+    feedback.setAttribute('aria-label', correct ? 'Target reached' : 'Keep going');
+  }
+  if (next) {
+    next.disabled = !correct && !passed;
+    const upcoming = nextTutorialLesson();
+    next.textContent = correct || passed ? !upcoming && tutorialFinishable() ? 'Finish' : 'Next' : 'Make the target';
+  }
+  const prompt = tutorialContent.querySelector<HTMLElement>('.lesson-prompt');
+  if (prompt) prompt.textContent = correct ? 'Nice work!' : 'Tap beads toward or away from the bar. Press Show to watch first.';
+  const progress = tutorialContent.querySelector<HTMLElement>('.lesson-progress');
+  if (progress) progress.textContent = `${tutorialIndex + 1} / ${tutorialLessons[tutorialOp].length}`;
+}
+function renderTutorial() {
+  stopTutorialDemo();
+  tutorialOperations.innerHTML = '';
+  operationOrder.forEach((op) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `tutorial-operation${op === tutorialOp ? ' selected' : ''}`;
+    button.textContent = `${operationNames[op]}${tutorialLessons[op].every((_, index) => tutorialDone.has(`${op}:${index}`)) ? ' ✓' : ''}`;
+    button.setAttribute('aria-pressed', String(op === tutorialOp));
+    button.onclick = () => { tutorialOp = op; tutorialIndex = 0; tutorialDigits = String(tutorialLessons[op][0].start).padStart(3, '0').split('').map(Number); saveTutorial(); renderTutorial(); };
+    tutorialOperations.appendChild(button);
+  });
+  const lesson = tutorialLessons[tutorialOp][tutorialIndex];
+  tutorialDigits = String(lesson.start).padStart(3, '0').split('').map(Number);
+  tutorialDemoOn = false;
+  tutorialLessonNav = document.createElement('nav');
+  tutorialLessonNav.className = 'tutorial-lesson-nav';
+  tutorialLessonNav.setAttribute('aria-label', `${operationNames[tutorialOp]} lessons`);
+  tutorialLessons[tutorialOp].forEach((item, index) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = `${index + 1}${tutorialDone.has(`${tutorialOp}:${index}`) ? ' ✓' : ''}`;
+    button.className = `lesson-number${index === tutorialIndex ? ' selected' : ''}`;
+    button.setAttribute('aria-label', `${operationNames[tutorialOp]} lesson ${index + 1}: ${item.title}`);
+    button.setAttribute('aria-current', String(index === tutorialIndex));
+    button.onclick = () => { tutorialIndex = index; saveTutorial(); renderTutorial(); };
+    tutorialLessonNav!.appendChild(button);
+  });
+  const complete = tutorialDone.has(tutorialKey());
+  tutorialContent.innerHTML = `<div class="lesson-meta"><span class="lesson-progress"></span><span class="lesson-feedback" aria-live="polite"></span></div><h3 class="lesson-title">${lesson.title}</h3><div class="lesson-equation" aria-label="${lesson.equation.join(' ')}">${lesson.equation.map((part) => `<span class="equation-part${['+', '−', '×', '÷', '='].includes(part) ? ' operator' : ''}">${part}</span>`).join('')}</div>${lesson.groups ? `<div class="lesson-groups" aria-label="${lesson.groups.count} equal groups of ${lesson.groups.each}">${Array.from({ length: lesson.groups.count }, () => `<div class="lesson-group">${Array.from({ length: Math.min(lesson.groups!.each, 10) }, () => '<i></i>').join('')}</div>`).join('')}</div>` : `<div class="lesson-moves" aria-label="${lesson.moves!.join(', ')}">${lesson.moves!.map((move) => `<span class="move-chip">${move}</span>`).join('')}</div>`}<div class="lesson-target"><span>Make</span><strong>${lesson.goal}</strong></div><p class="lesson-prompt">Tap beads toward or away from the bar. Press Show to watch first.</p><div class="lesson-legend" aria-label="Abacus bead values"><span><i class="legend-five"></i>5</span><span><i class="legend-one"></i>1</span></div><div class="lesson-rack"></div><div class="lesson-controls"><button type="button" class="lesson-reset" aria-label="Reset lesson">↺</button><button type="button" class="lesson-show">▶ Show</button><button type="button" class="primary lesson-next" ${complete ? '' : 'disabled'}>${complete ? 'Next' : 'Make the target'}</button></div>`;
+  renderLessonRack();
+  tutorialContent.querySelector<HTMLButtonElement>('.lesson-reset')!.onclick = () => {
+    stopTutorialDemo();
+    tutorialDone.delete(tutorialKey());
+    tutorialDigits = String(lesson.start).padStart(3, '0').split('').map(Number);
+    saveTutorial();
+    renderLessonRack();
+    refreshTutorialProgress();
+  };
+  tutorialContent.querySelector<HTMLButtonElement>('.lesson-show')!.onclick = showTutorialDemo;
+  tutorialContent.querySelector<HTMLButtonElement>('.lesson-next')!.onclick = advanceTutorial;
+  tutorialContent.prepend(tutorialLessonNav!);
+}
+function showTutorialDemo() {
+  stopTutorialDemo();
+  const lesson = tutorialLessons[tutorialOp][tutorialIndex];
+  tutorialDigits = String(lesson.start).padStart(3, '0').split('').map(Number);
+  tutorialDemoOn = true;
+  let frame = 0;
+  const showFrame = () => {
+    tutorialDigits = String(lesson.demo[frame]).padStart(3, '0').split('').map(Number);
+    renderLessonRack();
+    frame++;
+    if (frame < lesson.demo.length) demoTimer = setTimeout(showFrame, 650);
+    else demoTimer = setTimeout(() => {
+      tutorialDigits = String(lesson.start).padStart(3, '0').split('').map(Number);
+      tutorialDemoOn = false;
+      renderLessonRack();
+      demoTimer = null;
+    }, 900);
+  };
+  showFrame();
+}
+function renderTutorialComplete() {
+  stopTutorialDemo();
+  tutorialLessonNav = null;
+  tutorialContent.innerHTML = `<div class="lesson-complete"><h3 class="lesson-title">You did it!</h3><div class="lesson-badges">${operationOrder.map((op) => `<span class="lesson-badge${tutorialLessons[op].every((_, index) => tutorialDone.has(`${op}:${index}`)) ? ' done' : ''}" aria-label="${operationNames[op]}">${{ add: '+', sub: '−', mul: '×', div: '÷' }[op]}</span>`).join('')}</div><div class="lesson-equation">${['+', '−', '×', '÷'].map((symbol) => `<span class="equation-part operator">${symbol}</span>`).join('')}</div><button type="button" class="lesson-review">Back to lessons</button></div>`;
+  tutorialContent.querySelector<HTMLButtonElement>('.lesson-review')!.onclick = () => { tutorialOp = 'add'; tutorialIndex = 0; saveTutorial(); renderTutorial(); };
+}
+function advanceTutorial() {
+  if (tutorialValue() !== tutorialLessons[tutorialOp][tutorialIndex].goal && !tutorialDone.has(tutorialKey())) return;
+  tutorialDone.add(tutorialKey());
+  saveTutorial();
+  refreshTutorialProgress();
+  const current = tutorialIndex + 1;
+  if (current < tutorialLessons[tutorialOp].length) tutorialIndex = current;
+  else {
+    const nextLesson = nextTutorialLesson();
+    if (nextLesson) { tutorialOp = nextLesson.op; tutorialIndex = nextLesson.index; }
+    else { saveTutorial(); renderTutorialComplete(); return; }
+  }
+  saveTutorial();
+  renderTutorial();
+}
+tutorialContent.addEventListener('click', (event) => {
+  const target = (event.target as HTMLElement).closest<HTMLButtonElement>('.lesson-bead');
+  if (!target) return;
+  stopTutorialDemo();
+  tutorialDemoOn = false;
+  const rod = Number(target.dataset.rod), index = Number(target.dataset.index);
+  const value = tutorialDigits[rod];
+  if (target.dataset.deck === 'upper') tutorialDigits[rod] += value >= 5 ? -5 : 5;
+  else {
+    const low = value % 5;
+    tutorialDigits[rod] = Math.floor(value / 5) * 5 + (index < low ? index : index + 1);
+  }
+  tutorialDone.delete(tutorialKey());
+  saveTutorial();
+  refreshTutorialProgress();
+  renderLessonRack();
+  tutorialContent.querySelector<HTMLButtonElement>(`.lesson-bead[data-rod="${rod}"][data-deck="${target.dataset.deck}"][data-index="${index}"]`)?.focus({ preventScroll: true });
+});
+function openTutorial() {
+  settings.close();
+  renderTutorial();
+  tutorial.showModal();
+}
+($('open-tutorial') as HTMLButtonElement).onclick = openTutorial;
+($('close-tutorial') as HTMLButtonElement).onclick = () => tutorial.close();
+tutorial.addEventListener('close', stopTutorialDemo);
+
 // --- Worksheet --------------------------------------------------------------
 // A sheet of problems to work on a soroban of your own. Nothing here is graded
 // and nothing touches the board: the whole point is that you are working
@@ -800,16 +1078,18 @@ const sheetActions = $('sheet-actions');
 // rather than a stale one — and so opening Settings does not throw away a sheet
 // you are part-way through.
 const configKey = () => {
-  const move = test.ops.some((op) => op !== 'mul');
+  const move = test.ops.some((op) => op === 'add' || op === 'sub');
   const mul = test.ops.includes('mul');
   // Only the rungs actually in play, so changing a ladder that is switched off
   // cannot discard a sheet its own settings did not change.
-  return `${[...test.ops].sort().join('+')}|${move ? test.levels.move : ''}|${mul ? test.levels.mul : ''}`;
+  const div = test.ops.includes('div');
+  return `v2|${[...test.ops].sort().join('+')}|${move ? test.levels.move : ''}|${mul ? test.levels.mul : ''}|${div ? test.levels.div : ''}`;
 };
 const rungNames = () => {
   const names: string[] = [];
-  if (test.ops.some((op) => op !== 'mul')) names.push(moveStepLabel(test.levels.move));
+  if (test.ops.some((op) => op === 'add' || op === 'sub')) names.push(moveStepLabel(test.levels.move));
   if (test.ops.includes('mul')) names.push(mulStepLabel(test.levels.mul));
+  if (test.ops.includes('div')) names.push(divStepLabel(test.levels.div));
   return names.join(' · ');
 };
 
@@ -870,7 +1150,7 @@ function renderSheet() {
 }
 
 function openSheet() {
-  if (sheet.config !== configKey() || !sheet.problems.length) newSheet();
+  if (sheet.config !== configKey() || !sheet.problems.length || !sheet.problems.every(isProblem)) newSheet();
   else renderSheet();
   settings.close();
   if (!sheetDialog.open) sheetDialog.showModal();
@@ -891,7 +1171,7 @@ function restoreSheet(raw: unknown) {
 
 ($('worksheet') as HTMLButtonElement).onclick = openSheet;
 ($('close-sheet') as HTMLButtonElement).onclick = () => sheetDialog.close();
-for (const dialog of [settings, welcome, sheetDialog]) dialog.addEventListener('click', e => { if (e.target === dialog) { const r = dialog.getBoundingClientRect(); if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) dialog.close(); } });
+for (const dialog of [settings, welcome, sheetDialog, tutorial]) dialog.addEventListener('click', e => { if (e.target === dialog) { const r = dialog.getBoundingClientRect(); if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) dialog.close(); } });
 try { if (!localStorage.getItem('soroban-welcomed')) welcome.showModal(); } catch { welcome.showModal(); }
 labels(); render(); requestAnimationFrame(frame);
 if ('serviceWorker' in navigator && import.meta.url.includes('/assets/')) navigator.serviceWorker.register('/sw.js').catch(() => {});

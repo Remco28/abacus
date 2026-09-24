@@ -52,14 +52,81 @@ try {
   assert.equal(await evaluate('document.querySelector("#move-level").options.length'), 11, 'adding and taking away runs to eleven rungs');
   assert.match(await evaluate('document.querySelector("#move-level").options[2].textContent'), /small friends, one digit/, 'rungs are named for the move they teach, smallest first');
   assert.equal(await evaluate('document.querySelector("#mul-level").options.length'), 6, 'multiplying runs to six');
+  assert.equal(await evaluate('document.querySelector("#div-level").options.length'), 6, 'division runs to six exact-quotient rungs');
+  assert.equal(await evaluate('document.querySelector("#div-level-row").hidden'), true, 'division rung stays tucked away until selected');
   assert.equal(await evaluate('document.querySelector("#mul-level-row").hidden'), true, 'the multiplying ladder is out of the way until multiplication is on');
   await click('#op-mul');
+  await click('#op-div');
   await click('#op-add');
-  assert.deepEqual(await evaluate('[...document.querySelectorAll("#op-add,#op-sub,#op-mul")].map(b=>b.getAttribute("aria-pressed"))'), ['false', 'false', 'true'], 'operations select independently');
+  assert.deepEqual(await evaluate('[...document.querySelectorAll("#op-add,#op-sub,#op-mul,#op-div")].map(b=>b.getAttribute("aria-pressed"))'), ['false', 'false', 'true', 'true'], 'operations select independently');
   assert.equal(await evaluate('document.querySelector("#mul-level-row").hidden'), false, 'the multiplying ladder appears with multiplication');
+  assert.equal(await evaluate('document.querySelector("#div-level-row").hidden'), false, 'the division ladder appears with division');
   assert.equal(await evaluate('document.querySelector("#move-level-row").hidden'), true, 'and the adding ladder steps aside');
+  await click('#op-mul'); // Leave division alone so the next generated item is guaranteed to be a division.
   await click('#test-mode');
   assert.equal(await text('#test-mode'), 'On', 'test mode reports itself on');
+  const savedProblem = JSON.parse(await evaluate('localStorage.getItem("soroban-v1")')).test.problem;
+  const divisionLines = savedProblem.operands;
+  assert.equal(savedProblem.op, 'div', 'the practice generator produced division');
+  assert.equal(divisionLines.length, 2, 'division asks for two operands');
+  assert.equal(divisionLines[0] % divisionLines[1], 0, 'generated division problems have no remainder');
+  assert.equal(divisionLines[0] / divisionLines[1], savedProblem.answer, 'saved quotient matches exact division');
+  await click('#close-settings');
+  await click('#problem');
+  assert.deepEqual(await lines(), [`${divisionLines[0]}`, `÷ ${divisionLines[1]}`], 'division is shown as dividend divided by divisor');
+  await click('#close-problem');
+  const valueBeforeTutorial = await text('#value');
+  await click('#settings');
+  await click('#open-tutorial');
+  assert.equal(await evaluate('document.querySelector("#tutorial-dialog").open'), true, 'tutorial opens from settings');
+  assert.equal(await evaluate('document.querySelector("#settings-dialog").open'), false, 'tutorial replaces settings');
+  assert.deepEqual(await evaluate('[...document.querySelectorAll(".tutorial-operation")].map(b=>b.textContent.trim().split(" ")[0])'), ['Add', 'Subtract', 'Multiply', 'Divide'], 'all four visual lessons are selectable');
+  assert.equal(await evaluate('document.querySelectorAll(".lesson-bead").length'), 15, 'the lesson shows a separate three-rod abacus');
+  const tutorialLayout = await evaluate('(()=>{const d=document.querySelector("#tutorial-dialog"),b=document.querySelector(".lesson-bead"),r=document.querySelector(".lesson-abacus");return {dialogWidth:d.clientWidth,dialogScrollWidth:d.scrollWidth,beadWidth:b.getBoundingClientRect().width,beadHeight:b.getBoundingClientRect().height,rackRight:r.getBoundingClientRect().right,contentRight:document.querySelector("#tutorial-content").getBoundingClientRect().right}})()');
+  assert.ok(tutorialLayout.dialogScrollWidth <= tutorialLayout.dialogWidth + 1, `tutorial fits without horizontal scrolling on a phone: ${JSON.stringify(tutorialLayout)}`);
+  assert.ok(tutorialLayout.beadWidth >= 40 && tutorialLayout.beadHeight >= 40, `lesson beads are touch-sized: ${JSON.stringify(tutorialLayout)}`);
+  assert.ok(tutorialLayout.rackRight <= tutorialLayout.contentRight + 1, `mini-abacus stays inside the tutorial content: ${JSON.stringify(tutorialLayout)}`);
+  await send('Emulation.setDeviceMetricsOverride', { width: 320, height: 568, deviceScaleFactor: 1, mobile: true });
+  const narrowTutorialLayout = await evaluate('(()=>{const d=document.querySelector("#tutorial-dialog"),b=document.querySelector(".lesson-bead"),r=document.querySelector(".lesson-abacus");return {dialogWidth:d.clientWidth,dialogScrollWidth:d.scrollWidth,beadWidth:b.getBoundingClientRect().width,beadHeight:b.getBoundingClientRect().height,rackRight:r.getBoundingClientRect().right,contentRight:document.querySelector("#tutorial-content").getBoundingClientRect().right}})()');
+  assert.ok(narrowTutorialLayout.dialogScrollWidth <= narrowTutorialLayout.dialogWidth + 1, `tutorial fits a narrow phone: ${JSON.stringify(narrowTutorialLayout)}`);
+  assert.ok(narrowTutorialLayout.beadWidth >= 40 && narrowTutorialLayout.beadHeight >= 40, `beads remain touch-sized on a narrow phone: ${JSON.stringify(narrowTutorialLayout)}`);
+  assert.ok(narrowTutorialLayout.rackRight <= narrowTutorialLayout.contentRight + 1, `mini-abacus fits a narrow phone: ${JSON.stringify(narrowTutorialLayout)}`);
+  await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+  assert.equal(await evaluate('document.querySelectorAll(".tutorial-lesson-nav .lesson-number").length'), 3, 'addition has a numbered path of three visual lessons');
+  await click('.tutorial-operation:last-child');
+  await click('.lesson-show');
+  await pause(2800);
+  assert.equal(await evaluate('[...document.querySelectorAll(".lesson-group i.active")].length'), 12, 'the sharing demonstration gives one object to each group');
+  assert.equal(await evaluate('document.querySelectorAll(".lesson-group").length'), 3, 'division begins with three visible sharing groups');
+  assert.equal(await evaluate('document.querySelectorAll(".lesson-group i").length'), 12, 'the division diagram shows all twelve objects to share');
+  await click('.lesson-reset');
+  await evaluate('[...document.querySelectorAll(".lesson-bead")].find(b=>b.dataset.rod==="2"&&b.dataset.deck==="lower"&&b.dataset.index==="3").click()');
+  assert.equal(await text('.lesson-next'), 'Next', 'the division bead challenge reaches the quotient');
+  await click('.lesson-next');
+  assert.equal(await evaluate('document.querySelector(".lesson-equation").getAttribute("aria-label")'), '24 ÷ 3 = ?', 'division progresses to the next share challenge');
+  await click('.tutorial-operation:first-child');
+  assert.equal(await evaluate('document.querySelectorAll(".tutorial-lesson-nav .lesson-number").length'), 3, 'lessons can be browsed directly within an operation');
+  await click('.tutorial-lesson-nav .lesson-number:last-child');
+  assert.equal(await evaluate('document.querySelector(".lesson-equation").getAttribute("aria-label")'), '8 + 7 = 15', 'a learner can jump ahead to a later lesson');
+  assert.equal(await text('.lesson-next'), 'Make the target', 'the skipped lesson remains a genuine challenge');
+  await click('.tutorial-lesson-nav .lesson-number:first-child');
+  assert.equal(await text('.lesson-next'), 'Make the target', 'jumping to an unfinished lesson does not mark it complete');
+  await click('.lesson-show');
+  await pause(1450);
+  assert.equal(await evaluate('document.querySelector(".lesson-feedback").textContent'), '✓', 'the demonstration visibly reaches its target');
+  await click('.lesson-reset');
+  assert.equal(await text('.lesson-next'), 'Make the target', 'reset returns the tutorial practice board to its start');
+  await evaluate('[...document.querySelectorAll(".lesson-bead")].find(b=>b.dataset.rod==="2"&&b.dataset.deck==="lower"&&b.dataset.index==="3").click()');
+  assert.equal(await text('.lesson-next'), 'Next', 'the learner completes a bead challenge with taps');
+  await click('.lesson-next');
+  assert.equal(await evaluate('document.querySelector(".lesson-equation").getAttribute("aria-label")'), '4 + 3 = 7', 'guided progression returns to unfinished lessons after a jump');
+  assert.deepEqual(await evaluate('JSON.parse(localStorage.getItem("soroban-tutorial-v1")).done'), ['div:0','add:0'], 'completed lesson progress is saved');
+  assert.equal(await text('.lesson-next'), 'Make the target', 'completing one lesson does not falsely unlock the others');
+  await click('#close-tutorial');
+  assert.equal(await text('#value'), valueBeforeTutorial, 'tutorial practice does not alter the real board');
+  await click('#settings');
+  await click('#op-mul');
+  await click('#op-div');
   await click('#close-settings');
 
   assert.equal(await shown('#problem'), true, 'the Problem control appears');
@@ -198,7 +265,7 @@ try {
   assert.match(await text('#sheet-note'), /^8 problems at 1 · direct, one digit/, 'the sheet names its rung and the short length that rung can fill');
 
   const sheet = () => evaluate('[...document.querySelectorAll("#sheet-lines .sheet-item")].map(li=>({index:li.querySelector(".sheet-index").textContent,lines:[...li.querySelectorAll(".sheet-line")].map(s=>s.textContent),total:li.querySelector(".sheet-total")?.textContent??null}))');
-  const answered = (lines) => lines.reduce((sum, line, i) => sum + (i ? Number(line.replace(/^[+−×]\s*/, '')) : Number(line)), 0);
+  const answered = (lines) => lines.reduce((sum, line, i) => sum + (i ? Number(line.replace(/^[+−×÷]\s*/, '')) : Number(line)), 0);
 
   let rows = await sheet();
   assert.equal(rows.length, 8, 'a sheet is sized to its rung');
@@ -248,7 +315,7 @@ try {
   await click('#close-sheet');
 
   assert.deepEqual(errors, [], `no browser exceptions: ${JSON.stringify(errors[0] ?? null)}`);
-  console.log('PASS: test mode normalizes and holds the decimal, reads the problem in a dialog, judges clear/keep/reveal, accepts and rejects answers, restores the decimal, and persists; a worksheet is sized to its rung, numbered, never repeated, checked one problem at a time, saved, laid out two-up for paper, and leaves the board alone.');
+  console.log('PASS: test mode normalizes and holds the decimal, reads the problem in a dialog, judges clear/keep/reveal, accepts and rejects answers, restores the decimal, and persists; division stays exact; tutorial touch targets fit phone layouts and bead challenges/progress work; worksheets are rung-sized, numbered, unique, checkable, persistent, print two-up, and leave the board alone.');
 } finally {
   ws.close();
 }

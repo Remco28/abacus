@@ -5,7 +5,7 @@
 // 999999. Every answer has to fit that, and a subtraction must never pass
 // through a negative running total, because the board cannot show one.
 //
-// Difficulty follows the classical soroban order rather than digit count:
+// Addition and subtraction difficulty follows the classical soroban order rather than digit count:
 // direct movements, then the 5-complements (Small Friends), then the
 // 10-complements (Big Friends), then a carry onto a rod that needs both
 // (Double Combination), then rows. Each rung below adds exactly one thing to
@@ -20,14 +20,14 @@ export const TEST_ONES = COLUMNS - 1;
 export const CAPACITY = 10 ** PLACES - 1; // 999999, the most six rods can show
 export const MULTI_ROW = 10;
 
-export type Operation = 'add' | 'sub' | 'mul';
+export type Operation = 'add' | 'sub' | 'mul' | 'div';
 export type Move = 'direct' | 'small' | 'big' | 'double';
 export type Problem = { op: Operation; operands: number[]; answer: number };
 export type Beads = { up: 0 | 1; low: number };
-/** Which rung of each ladder is selected. Both are 1-based. */
-export type Levels = { move: number; mul: number };
+/** Which rung of each ladder is selected. All are 1-based. */
+export type Levels = { move: number; mul: number; div: number };
 
-export const SIGN: Record<Operation, string> = { add: '+', sub: '−', mul: '×' };
+export const SIGN: Record<Operation, string> = { add: '+', sub: '−', mul: '×', div: '÷' };
 
 /** A rod's digit as the beads that show it. One digit, one bead state. */
 export const beads = (digit: number): Beads => ({ up: digit >= 5 ? 1 : 0, low: digit % 5 });
@@ -83,7 +83,7 @@ const digitsOf = (n: number): number[] => {
  * per step, which is what those rungs constrain.
  */
 export function movesFor(op: Operation, operands: number[]): Move[] {
-  if (op === 'mul' || operands.length < 2) return [];
+  if (op === 'mul' || op === 'div' || operands.length < 2) return [];
   const rods = new Array(PLACES).fill(0);
   digitsOf(operands[0]).forEach((d, i) => {
     if (i < PLACES) rods[i] = d;
@@ -115,18 +115,18 @@ export function movesFor(op: Operation, operands: number[]): Move[] {
 
 /** The number the board should show when the problem is finished. */
 export function answerOf(op: Operation, operands: number[]): number {
+  if (op === 'div') return operands[0] / operands[1];
+  if (op === 'mul') return operands[0] * operands[1];
   const rest = operands.slice(1).reduce((a, b) => a + b, 0);
-  if (op === 'add') return operands[0] + rest;
-  if (op === 'sub') return operands[0] - rest;
-  return operands[0] * operands[1];
+  return op === 'add' ? operands[0] + rest : operands[0] - rest;
 }
 
 /**
  * The running total after each step. Only adding and taking away have steps, so
- * multiplication returns nothing rather than the NaN a partial product would be.
+ * multiplication and division return nothing rather than a misleading partial result.
  */
 export function runningTotals(op: Operation, operands: number[]): number[] {
-  if (op === 'mul') return [];
+  if (op === 'mul' || op === 'div') return [];
   return operands.map((_, i) => answerOf(op, operands.slice(0, i + 1)));
 }
 
@@ -190,8 +190,21 @@ export const MUL_STEPS: { name: string; factor: [number, number]; other: [number
   { name: '3 × 3', factor: [100, 999], other: [100, 999], sheet: 20 },
 ];
 
+// Exact division is generated as divisor × quotient, so every problem has a
+// whole-number answer and every dividend still fits the six-rod board. The
+// rungs grow the quotient first, then the divisor, keeping the meaning visible.
+export const DIV_STEPS: { name: string; divisor: [number, number]; quotient: [number, number]; sheet: number }[] = [
+  { name: 'one-digit groups', divisor: [2, 9], quotient: [2, 9], sheet: 8 },
+  { name: 'two-digit groups', divisor: [2, 9], quotient: [10, 99], sheet: 12 },
+  { name: 'three-digit groups', divisor: [2, 9], quotient: [100, 999], sheet: 14 },
+  { name: 'groups of tens', divisor: [10, 99], quotient: [2, 9], sheet: 12 },
+  { name: 'tens by tens', divisor: [10, 99], quotient: [10, 99], sheet: 16 },
+  { name: 'three-digit divisors', divisor: [100, 999], quotient: [2, 999], sheet: 20 },
+];
+
 export const MOVE_STEP_COUNT = MOVE_STEPS.length;
 export const MUL_STEP_COUNT = MUL_STEPS.length;
+export const DIV_STEP_COUNT = DIV_STEPS.length;
 
 function stepIndex(step: number, count: number): number {
   return Math.min(count, Math.max(1, Math.round(step) || 1)) - 1;
@@ -205,6 +218,19 @@ const rungLabel = (step: number, count: number, names: { name: string }[]): stri
 };
 export const moveStepLabel = (step: number): string => rungLabel(step, MOVE_STEP_COUNT, MOVE_STEPS);
 export const mulStepLabel = (step: number): string => rungLabel(step, MUL_STEP_COUNT, MUL_STEPS);
+export const divStepLabel = (step: number): string => rungLabel(step, DIV_STEP_COUNT, DIV_STEPS);
+
+/** Exact quotient/divisor pairs for one division rung. */
+export function fitsDivision(operands: number[], rung: number): boolean {
+  if (!Array.isArray(operands) || operands.length !== 2) return false;
+  const [dividend, divisor] = operands;
+  if (!Number.isInteger(dividend) || !Number.isInteger(divisor) || dividend < 1 || dividend > CAPACITY || divisor < 2 || divisor > CAPACITY) return false;
+  if (dividend % divisor !== 0) return false;
+  const step = DIV_STEPS[stepIndex(rung, DIV_STEP_COUNT)];
+  const quotient = dividend / divisor;
+  return divisor >= step.divisor[0] && divisor <= step.divisor[1]
+    && quotient >= step.quotient[0] && quotient <= step.quotient[1];
+}
 
 const randInt = (rand: () => number, min: number, max: number): number => min + Math.floor(rand() * (max - min + 1));
 const pick = <T>(rand: () => number, list: T[]): T => list[Math.min(list.length - 1, Math.floor(rand() * list.length))];
@@ -243,9 +269,17 @@ const LAST_RESORT: Record<Operation, Record<string, number[]>> = {
   add: { direct: [2, 2], small: [4, 3], big: [8, 7], double: [6, 7], mixed: [23, 45, 16] },
   sub: { direct: [9, 4], small: [6, 2], big: [11, 2], double: [14, 6], mixed: [84, 23, 16] },
   mul: { mixed: [12, 12] },
+  div: { mixed: [12, 3] },
 };
 
 function tryProblem(op: Operation, levels: Levels, rand: () => number): Problem | null {
+  if (op === 'div') {
+    const spec = DIV_STEPS[stepIndex(levels.div, DIV_STEP_COUNT)];
+    const divisor = randInt(rand, spec.divisor[0], spec.divisor[1]);
+    const quotient = randInt(rand, spec.quotient[0], spec.quotient[1]);
+    const dividend = divisor * quotient;
+    return fitsDivision([dividend, divisor], levels.div) ? { op, operands: [dividend, divisor], answer: quotient } : null;
+  }
   if (op === 'mul') {
     const spec = MUL_STEPS[stepIndex(levels.mul, MUL_STEP_COUNT)];
     const operands = [randInt(rand, spec.factor[0], spec.factor[1]), randInt(rand, spec.other[0], spec.other[1])];
@@ -258,6 +292,13 @@ function tryProblem(op: Operation, levels: Levels, rand: () => number): Problem 
 }
 
 function lastResort(op: Operation, levels: Levels): Problem {
+  if (op === 'div') {
+    const spec = DIV_STEPS[stepIndex(levels.div, DIV_STEP_COUNT)];
+    const divisor = Math.floor((spec.divisor[0] + spec.divisor[1]) / 2);
+    const quotient = Math.floor((spec.quotient[0] + spec.quotient[1]) / 2);
+    const boundedQuotient = Math.max(1, Math.min(quotient, Math.floor(CAPACITY / divisor)));
+    return { op, operands: [divisor * boundedQuotient, divisor], answer: boundedQuotient };
+  }
   if (op === 'mul') {
     const spec = MUL_STEPS[stepIndex(levels.mul, MUL_STEP_COUNT)];
     const operands = [Math.floor((spec.factor[0] + spec.factor[1]) / 2), Math.floor((spec.other[0] + spec.other[1]) / 2)];
@@ -285,14 +326,15 @@ export function generate(ops: Operation[], levels: Levels, rand: () => number = 
 
 /**
  * How long a practice sheet is: the shortest rung in play decides, so a sheet
- * mixing addition and multiplication is still something multiplication's
- * smallest rung can fill without repeating itself.
+ * mixing operations fits the smallest selected rung without repeating itself.
  */
 export function sheetSize(ops: Operation[], levels: Levels): number {
   const options = ops.length ? ops : (['add'] as Operation[]);
   return Math.min(...options.map((op) => (op === 'mul'
     ? MUL_STEPS[stepIndex(levels.mul, MUL_STEP_COUNT)].sheet
-    : MOVE_STEPS[stepIndex(levels.move, MOVE_STEP_COUNT)].sheet)));
+    : op === 'div'
+      ? DIV_STEPS[stepIndex(levels.div, DIV_STEP_COUNT)].sheet
+      : MOVE_STEPS[stepIndex(levels.move, MOVE_STEP_COUNT)].sheet)));
 }
 
 /**
