@@ -1,4 +1,5 @@
 import './style.css';
+import { clack, type Contact } from './clack';
 import { COLUMNS, SIZE, UPPER, LOWER, createBoard, digit, formatValue, placeName, moveBead, step, ShakeDetector } from './model';
 import { CAPACITY, answerOf, MOVE_STEP_COUNT, MUL_STEP_COUNT, DIV_STEP_COUNT, TEST_ONES, describe as describeProblem, generate, generateSet, moveStepLabel, mulStepLabel, divStepLabel, problemLines, type Levels, type Operation, type Problem } from './problems';
 
@@ -76,18 +77,10 @@ function unlockSound() {
   try { audio ??= new AudioContext(); void audio.resume().catch(() => {}); } catch { /* Some browsers have no audio device. */ }
 }
 // --- Sound -----------------------------------------------------------------
-// A bead is a small hard body, and what it sounds like on contact is a few
-// short resonances rung at once: a bright "tok" when it meets another bead, and
-// a lower, woodier knock when it meets the bar or the frame. Each is built once
-// as a handful of slightly different takes, so repeated clicks never sound like
-// one sample on a loop, and every hit picks its loudness and brightness from how
-// hard it landed. Nothing is ever continuous: there is no sliding tone.
-type Contact = 'bead' | 'bar';
-const VOICES: Record<Contact, { modes: [number, number, number][]; body: number; noise: number }> = {
-  // [frequency Hz, amplitude, decay seconds]
-  bead: { modes: [[2350, 1, .011], [4100, .55, .006], [6650, .3, .0035]], body: 0, noise: .35 },
-  bar: { modes: [[1180, 1, .018], [2630, .45, .009], [4300, .2, .005]], body: .55, noise: .25 },
-};
+// Each contact is a few takes of a short, unpitched clack built in clack.ts: a
+// bright crack for bead on bead and a lower knock for bead on bar or frame.
+// Takes differ, so repeats never sound looped, and every hit picks its loudness
+// and brightness from how hard it landed. Nothing is ever continuous.
 const TAKES = 4;
 let takes: Record<Contact, AudioBuffer[]> | undefined;
 let master: GainNode | undefined;
@@ -95,33 +88,13 @@ let lastSound: Record<Contact, number> = { bead: 0, bar: 0 };
 let voices = 0;
 function buildTakes(ctx: AudioContext) {
   const rate = ctx.sampleRate;
-  const make = (kind: Contact, take: number) => {
-    const voice = VOICES[kind];
-    const length = Math.ceil(rate * (kind === 'bar' ? .07 : .045));
-    const buffer = ctx.createBuffer(1, length, rate);
-    const data = buffer.getChannelData(0);
-    // Each take is detuned a little, as no two beads ring quite alike.
-    const detune = 1 + (take - (TAKES - 1) / 2) * .025;
-    const phases = voice.modes.map(() => Math.random() * Math.PI * 2);
-    let noise = 0, peak = 0;
-    for (let i = 0; i < length; i++) {
-      const t = i / rate;
-      let v = 0;
-      voice.modes.forEach(([f, a, d], m) => { v += a * Math.exp(-t / d) * Math.sin(2 * Math.PI * f * detune * t + phases[m]); });
-      // A low thump under the knock: the bar and frame are heavier than a bead.
-      if (voice.body) v += voice.body * Math.exp(-t / .012) * Math.sin(2 * Math.PI * 190 * detune * t);
-      // The first millisecond or so is the hard edge of the impact itself.
-      noise = .5 * noise + .5 * (Math.random() * 2 - 1);
-      v += voice.noise * noise * Math.exp(-t / .0009);
-      v *= Math.min(1, t / .0003);
-      data[i] = v;
-      peak = Math.max(peak, Math.abs(v));
-    }
-    for (let i = 0; i < length; i++) data[i] /= peak || 1;
-    return buffer;
-  };
   takes = { bead: [], bar: [] };
-  for (const kind of ['bead', 'bar'] as const) for (let k = 0; k < TAKES; k++) takes[kind].push(make(kind, k));
+  for (const kind of ['bead', 'bar'] as const) for (let k = 0; k < TAKES; k++) {
+    const samples = clack(kind, rate);
+    const buffer = ctx.createBuffer(1, samples.length, rate);
+    buffer.getChannelData(0).set(samples);
+    takes[kind].push(buffer);
+  }
   // A gentle limiter, so a whole board landing at once stays a clatter rather
   // than a clip.
   const limiter = ctx.createDynamicsCompressor();
@@ -141,13 +114,13 @@ function clickSound(strength = 100, kind: Contact = 'bead') {
   const hit = Math.min(1, Math.max(0, strength) / 400);
   const source = audio.createBufferSource(), tone = audio.createBiquadFilter(), gain = audio.createGain();
   source.buffer = takes![kind][Math.floor(Math.random() * TAKES)];
-  source.playbackRate.value = .95 + Math.random() * .1;
+  source.playbackRate.value = .97 + Math.random() * .06;
   // Soft contacts are darker as well as quieter, which is what makes a gentle
   // nudge and a hard flick sound like the same bead.
   tone.type = 'lowpass';
-  tone.frequency.value = 1800 + 9000 * hit ** .8;
+  tone.frequency.value = 2500 + 10000 * hit ** .8;
   tone.Q.value = .5;
-  gain.gain.value = (kind === 'bar' ? .14 : .1) * (.3 + .7 * hit ** .7);
+  gain.gain.value = (kind === 'bar' ? .22 : .16) * (.3 + .7 * hit ** .7);
   source.connect(tone); tone.connect(gain); gain.connect(master!);
   voices++;
   source.onended = () => { voices--; source.disconnect(); tone.disconnect(); gain.disconnect(); };
