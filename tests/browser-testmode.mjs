@@ -242,6 +242,7 @@ try {
     const rest = digit % 5;
     if (rest) await tap(col, 246 + (rest - 1) * 36, tapId++);
   }
+  await pause(200); // a tapped deck glides to the bar rather than jumping there
   assert.equal(await text('#value'), `${answer}`, 'the board holds the answer');
 
   await click('#submit');
@@ -294,6 +295,7 @@ try {
   await click('#submit');
   await action('Reveal answer');
   await action('Next problem');
+  await pause(500); // the clear is a wave, and the readout follows the beads home
   assert.equal(await text('#value'), '0', 'Next problem clears the board');
   assert.equal(await text('#problem-heading'), 'Problem', 'and asks a fresh question');
   await click('#close-problem');
@@ -304,6 +306,7 @@ try {
     if (digit >= 5) await tap(5 - k, 28, tapId++);
     if (digit % 5) await tap(5 - k, 246 + (digit % 5 - 1) * 36, tapId++);
   }
+  await pause(200);
   assert.equal(await text('#value'), `${answer}`, 'the board is usable again after the clear');
 
   // Leaving test mode gives the readout and the decimal back.

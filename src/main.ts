@@ -23,8 +23,6 @@ type SheetState = { config: string; problems: Problem[]; revealed: number[] };
 let sheet: SheetState = { config: '', problems: [], revealed: [] };
 let decimalFrozen = false;
 let audio: AudioContext | undefined;
-let contactBuffer: AudioBuffer | undefined;
-let lastSound = 0;
 const status = (message: string) => { $('status').textContent = message; };
 type SavedTest = { on: boolean; ops: Operation[]; levels: Levels; problem: Problem | null; onesBefore: number; step: number };
 // A sheet is saved with the rungs it was built from, so changing a rung gives a
@@ -77,25 +75,83 @@ function unlockSound() {
   if (!sound) return;
   try { audio ??= new AudioContext(); void audio.resume().catch(() => {}); } catch { /* Some browsers have no audio device. */ }
 }
-function clickSound(strength = 100) {
-  if (!sound || !audio || audio.state !== 'running' || performance.now() - lastSound < 100) return;
-  lastSound = performance.now();
-  // Damped noise gives a dry contact without a pitched sweep or sliding tone.
-  if (!contactBuffer) {
-    contactBuffer = audio.createBuffer(1, Math.ceil(audio.sampleRate * .045), audio.sampleRate);
-    const data = contactBuffer.getChannelData(0);
-    let low = 0;
-    for (let i = 0; i < data.length; i++) {
-      const t = i / audio.sampleRate;
-      low = .65 * low + .35 * (Math.random() * 2 - 1);
-      data[i] = low * Math.exp(-t * 145) * Math.min(1, t / .001);
+// --- Sound -----------------------------------------------------------------
+// A bead is a small hard body, and what it sounds like on contact is a few
+// short resonances rung at once: a bright "tok" when it meets another bead, and
+// a lower, woodier knock when it meets the bar or the frame. Each is built once
+// as a handful of slightly different takes, so repeated clicks never sound like
+// one sample on a loop, and every hit picks its loudness and brightness from how
+// hard it landed. Nothing is ever continuous: there is no sliding tone.
+type Contact = 'bead' | 'bar';
+const VOICES: Record<Contact, { modes: [number, number, number][]; body: number; noise: number }> = {
+  // [frequency Hz, amplitude, decay seconds]
+  bead: { modes: [[2350, 1, .011], [4100, .55, .006], [6650, .3, .0035]], body: 0, noise: .35 },
+  bar: { modes: [[1180, 1, .018], [2630, .45, .009], [4300, .2, .005]], body: .55, noise: .25 },
+};
+const TAKES = 4;
+let takes: Record<Contact, AudioBuffer[]> | undefined;
+let master: GainNode | undefined;
+let lastSound: Record<Contact, number> = { bead: 0, bar: 0 };
+let voices = 0;
+function buildTakes(ctx: AudioContext) {
+  const rate = ctx.sampleRate;
+  const make = (kind: Contact, take: number) => {
+    const voice = VOICES[kind];
+    const length = Math.ceil(rate * (kind === 'bar' ? .07 : .045));
+    const buffer = ctx.createBuffer(1, length, rate);
+    const data = buffer.getChannelData(0);
+    // Each take is detuned a little, as no two beads ring quite alike.
+    const detune = 1 + (take - (TAKES - 1) / 2) * .025;
+    const phases = voice.modes.map(() => Math.random() * Math.PI * 2);
+    let noise = 0, peak = 0;
+    for (let i = 0; i < length; i++) {
+      const t = i / rate;
+      let v = 0;
+      voice.modes.forEach(([f, a, d], m) => { v += a * Math.exp(-t / d) * Math.sin(2 * Math.PI * f * detune * t + phases[m]); });
+      // A low thump under the knock: the bar and frame are heavier than a bead.
+      if (voice.body) v += voice.body * Math.exp(-t / .012) * Math.sin(2 * Math.PI * 190 * detune * t);
+      // The first millisecond or so is the hard edge of the impact itself.
+      noise = .5 * noise + .5 * (Math.random() * 2 - 1);
+      v += voice.noise * noise * Math.exp(-t / .0009);
+      v *= Math.min(1, t / .0003);
+      data[i] = v;
+      peak = Math.max(peak, Math.abs(v));
     }
-  }
-  const source = audio.createBufferSource(), gain = audio.createGain();
-  source.buffer = contactBuffer; source.playbackRate.value = .92 + Math.random() * .16;
-  gain.gain.value = .12 + Math.min(strength, 400) / 400 * .12;
-  source.connect(gain); gain.connect(audio.destination); source.start();
-  source.onended = () => { source.disconnect(); gain.disconnect(); };
+    for (let i = 0; i < length; i++) data[i] /= peak || 1;
+    return buffer;
+  };
+  takes = { bead: [], bar: [] };
+  for (const kind of ['bead', 'bar'] as const) for (let k = 0; k < TAKES; k++) takes[kind].push(make(kind, k));
+  // A gentle limiter, so a whole board landing at once stays a clatter rather
+  // than a clip.
+  const limiter = ctx.createDynamicsCompressor();
+  limiter.threshold.value = -14; limiter.knee.value = 8; limiter.ratio.value = 6;
+  limiter.attack.value = .002; limiter.release.value = .08;
+  master = ctx.createGain(); master.gain.value = .9;
+  master.connect(limiter); limiter.connect(ctx.destination);
+}
+function clickSound(strength = 100, kind: Contact = 'bead') {
+  if (!sound || !audio || audio.state !== 'running') return;
+  const now = performance.now();
+  // Two contacts of one kind closer than this are heard as one anyway, and a
+  // cap on voices keeps a wipe across six rods from piling up.
+  if (now - lastSound[kind] < 22 || voices >= 8) return;
+  lastSound[kind] = now;
+  if (!takes) buildTakes(audio);
+  const hit = Math.min(1, Math.max(0, strength) / 400);
+  const source = audio.createBufferSource(), tone = audio.createBiquadFilter(), gain = audio.createGain();
+  source.buffer = takes![kind][Math.floor(Math.random() * TAKES)];
+  source.playbackRate.value = .95 + Math.random() * .1;
+  // Soft contacts are darker as well as quieter, which is what makes a gentle
+  // nudge and a hard flick sound like the same bead.
+  tone.type = 'lowpass';
+  tone.frequency.value = 1800 + 9000 * hit ** .8;
+  tone.Q.value = .5;
+  gain.gain.value = (kind === 'bar' ? .14 : .1) * (.3 + .7 * hit ** .7);
+  source.connect(tone); tone.connect(gain); gain.connect(master!);
+  voices++;
+  source.onended = () => { voices--; source.disconnect(); tone.disconnect(); gain.disconnect(); };
+  source.start();
 }
 function soundLabel() { $('sound').setAttribute('aria-pressed', String(sound)); $('sound').textContent = sound ? 'On' : 'Off'; }
 soundLabel();
@@ -109,14 +165,34 @@ function element(name: string, attrs: Record<string, string | number>, parent: E
   for (const [key, value] of Object.entries(attrs)) el.setAttribute(key, String(value));
   parent.appendChild(el); return el;
 }
-svg.innerHTML = '<defs><filter id="shadow" x="-30%" y="-30%" width="160%" height="180%"><feDropShadow dx="0" dy="3" stdDeviation="2" flood-color="#354825" flood-opacity=".18"/></filter></defs>';
+// A soroban bead is two cones joined at the rim, seen side-on: the upper cone
+// faces the light and the lower one faces away, with a crisp ridge between
+// them, and the body darkens toward the tips as it turns away from the eye.
+// Each state is a gradient rather than a flat fill, and the shadow is a plain
+// offset shape rather than a filter, since thirty filtered beads redrawn every
+// frame is real work on a phone.
+const stops = (id: string, colors: [number, string][]) => `<linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1">${colors.map(([o, c]) => `<stop offset="${o}" stop-color="${c}"/>`).join('')}</linearGradient>`;
+svg.innerHTML = `<defs>${
+  stops('bead-idle', [[0, '#eef0de'], [.42, '#d9dec4'], [.5, '#cdd4b4'], [.51, '#bcc5a0'], [1, '#a3ae88']])
+}${stops('bead-on', [[0, '#6fa883'], [.42, '#43825f'], [.5, '#3a7656'], [.51, '#2c6347'], [1, '#1f4d36']])
+}${stops('bead-held', [[0, '#b4d3a6'], [.42, '#8db67f'], [.5, '#80a973'], [.51, '#6c9561'], [1, '#55794c']])
+}<linearGradient id="bead-turn" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#14251a" stop-opacity=".26"/><stop offset=".2" stop-color="#14251a" stop-opacity="0"/><stop offset=".72" stop-color="#14251a" stop-opacity="0"/><stop offset="1" stop-color="#14251a" stop-opacity=".3"/></linearGradient>${
+  stops('beam', [[0, '#2b5a4b'], [.5, '#1e4439'], [1, '#163329']])
+}</defs>`;
+// Rounded tips and slightly full cones; 34 units tall on a 36-unit pitch, so a
+// counted stack reads as beads resting on each other with only a hairline seam.
+const BEAD_PATH = 'M-25,-17 L25,-17 Q30,-17 33,-13 L40.5,-2.5 Q42,0 40.5,2.5 L33,13 Q30,17 25,17 L-25,17 Q-30,17 -33,13 L-40.5,2.5 Q-42,0 -40.5,-2.5 L-33,-13 Q-30,-17 -25,-17Z';
 const nodes: { el: Element; col: number; deck: 'upper' | 'lower'; index: number }[] = [];
 for (let col = 0; col < COLUMNS; col++) {
   const x = 20 + (col + .5) * 560 / COLUMNS;
-  element('line', { x1: x, x2: x, y1: 12, y2: 374, class: 'rail-shadow' });
-  element('line', { x1: x, x2: x, y1: 12, y2: 374, class: 'rod' });
+  element('line', { x1: x, x2: x, y1: 8, y2: 376, class: 'rail-shadow' });
+  element('line', { x1: x, x2: x, y1: 8, y2: 376, class: 'rod' });
 }
 element('rect', { x: 10, y: 122, width: 580, height: 24, rx: 5, class: 'count-bar' });
+element('path', { d: 'M14,124.5 H586', class: 'count-bar-edge' });
+// The frame's top and bottom rails: what a bead pushed away from the bar comes
+// to rest against, and what it knocks on.
+for (const y of [1, 373]) element('rect', { x: 10, y, width: 580, height: 9, rx: 4.5, class: 'frame' });
 for (let col = 0; col < COLUMNS; col++) {
   const x = 20 + (col + .5) * 560 / COLUMNS;
   if (col % 3 === 0) element('circle', { cx: x, cy: 134, r: 3, class: 'marker' });
@@ -124,9 +200,11 @@ for (let col = 0; col < COLUMNS; col++) {
     for (let index = 0; index < (deck === 'upper' ? 1 : 4); index++) {
       const el = element('g', { class: 'bead', tabindex: 0, role: 'button', 'data-col': col, 'data-deck': deck, 'data-index': index });
       element('rect', { x: -42, y: -20, width: 84, height: 40, fill: 'transparent' }, el);
-      element('path', { d: 'M-28,-16 L28,-16 Q33,-16 36,-10 L41,0 L36,10 Q33,16 28,16 L-28,16 Q-33,16 -36,10 L-41,0 L-36,-10 Q-33,-16 -28,-16Z', class: 'bead-face' }, el);
-      element('path', { d: 'M-25,-11 L25,-11', class: 'shine' }, el);
-      element('path', { d: 'M-5,0 L5,0', class: 'notch' }, el);
+      element('path', { d: BEAD_PATH, class: 'bead-shadow', transform: 'translate(1.5 3.5)' }, el);
+      element('path', { d: BEAD_PATH, class: 'bead-face' }, el);
+      element('path', { d: BEAD_PATH, class: 'bead-turn' }, el);
+      element('path', { d: 'M-36,0 H36', class: 'ridge' }, el);
+      element('path', { d: 'M-21,-11.5 Q0,-14.5 21,-11.5', class: 'shine' }, el);
       nodes.push({ el, col, deck, index });
     }
   }
@@ -234,15 +312,68 @@ function cancelPointers() {
   for (const [id, p] of pointers) { board[p.col][p.deck][p.index].held = false; if (p.el.hasPointerCapture(id)) p.el.releasePointerCapture(id); }
   pointers.clear();
 }
+// The two resting places of every bead: against the bar, counted, or back
+// against the frame. Slot 0 is the upper bead and 1..4 the lower ones, the same
+// order `positions` uses.
+const countedY = (slot: number) => slot === 0 ? UPPER.max : LOWER.min + (slot - 1) * SIZE;
+const restY = (slot: number) => slot === 0 ? UPPER.min : LOWER.max - (4 - slot) * SIZE;
+const slotOf = (deck: 'upper' | 'lower', index: number) => deck === 'upper' ? 0 : index + 1;
+// Where a bead is headed: the end of its glide if it has one, or where it is.
+// A second tap that lands while the first is still travelling has to be judged
+// against where the beads are going, or it undoes the move it meant to extend.
+const headedTo = (col: number, slot: number) => tweens.find(t => t.col === col && t.slot === slot)?.to ?? beadAt(col, slot).y;
+function headedDigit(col: number) {
+  const at = (slot: number) => ({ y: headedTo(col, slot), v: 0, held: false });
+  return digit({ upper: [at(0)], lower: [1, 2, 3, 4].map(at) });
+}
+// Moves one deck of a rod to new places as a single gesture: every bead in it
+// sets off together and arrives together, and the deck makes one sound when it
+// lands — a knock if its lead bead meets the bar or the frame, a tok if it
+// meets a bead that is already there.
+function glide(col: number, deck: 'upper' | 'lower', to: Map<number, number>, speed: number, hit: number, ease = flick) {
+  const moving = [...to].filter(([slot, y]) => Math.abs(headedTo(col, slot) - y) > .3 || Math.abs(beadAt(col, slot).y - y) > .3);
+  if (!moving.length) return;
+  const distance = Math.max(...moving.map(([slot, y]) => Math.abs(beadAt(col, slot).y - y)));
+  const dur = Math.max(45, Math.min(150, distance / Math.max(speed, 320) * 1000));
+  const toBar = moving.some(([slot, y]) => y === countedY(slot));
+  // The lead bead is the one nearest the stop it is travelling to.
+  const lead = deck === 'upper' ? 0 : toBar ? Math.min(...moving.map(([slot]) => slot)) : Math.max(...moving.map(([slot]) => slot));
+  const kind: Contact = deck === 'upper' || lead === (toBar ? 1 : 4) ? 'bar' : 'bead';
+  // A nudge of a few units into a seat the drag already sounded on stays silent.
+  for (const [slot, y] of moving) pushTween(col, slot, y, 0, dur, { ease, hit: distance < 4 ? 0 : hit, kind });
+}
+// A tap moves the tapped bead and everything it has to push, the way a finger
+// flicks a group of beads along the rod.
 function toggle(col: number, deck: 'upper' | 'lower', index: number) {
-  const c = board[col], beads = c[deck];
-  if (deck === 'upper') beads[0].y = digit(c) >= 5 ? UPPER.min : UPPER.max;
-  else {
-    const active = index < digit(c) % 5;
-    if (active) for (let i = index; i < 4; i++) beads[i].y = LOWER.max - (3 - i) * SIZE;
-    else for (let i = 0; i <= index; i++) beads[i].y = LOWER.min + i * SIZE;
-  }
-  beads.forEach(b => b.v = 0); clickSound(); render(); save();
+  const value = headedDigit(col);
+  const to = new Map<number, number>();
+  if (deck === 'upper') to.set(0, value >= 5 ? restY(0) : countedY(0));
+  else if (index < value % 5) for (let i = index; i < 4; i++) to.set(i + 1, restY(i + 1));
+  else for (let i = 0; i <= index; i++) to.set(i + 1, countedY(i + 1));
+  board[col][deck].forEach(b => b.v = 0);
+  // About 90ms for a full move: quick enough to feel like a flick, slow enough
+  // to see which beads went where.
+  glide(col, deck, to, 850, 230);
+}
+// Letting go of a dragged bead settles its deck into the nearest arrangement the
+// soroban can actually show, so no bead is ever left floating between counted
+// and not. A flick carries the dragged bead further in the direction it was
+// thrown before that choice is made, which is what lets a quick flick send a
+// bead home without having to drag it all the way.
+function settle(col: number, deck: 'upper' | 'lower', index: number, velocity: number) {
+  const beads = board[col][deck];
+  const thrown = velocity * .12;
+  const near = (slot: number, y: number) => Math.abs(y - countedY(slot)) < Math.abs(y - restY(slot));
+  const to = new Map<number, number>();
+  const draggedCounted = near(slotOf(deck, index), beads[index].y + thrown);
+  beads.forEach((b, i) => {
+    const slot = slotOf(deck, i);
+    // Whatever the dragged bead decided, the beads it would push decide the same.
+    const counted = i === index ? draggedCounted : draggedCounted && i < index ? true : !draggedCounted && i > index ? false : near(slot, b.y);
+    to.set(slot, counted ? countedY(slot) : restY(slot));
+    b.v = 0;
+  });
+  glide(col, deck, to, Math.abs(velocity), 90 + Math.abs(velocity) * .6, glideOut);
 }
 for (const node of nodes) {
   const { el, col, deck, index } = node;
@@ -251,6 +382,10 @@ for (const node of nodes) {
     if (e.button !== 0 || [...pointers.values()].some(p => p.col === col && p.deck === deck && p.index === index)) return;
     e.preventDefault();
     const b = board[col][deck][index], y = coords(e);
+    // A finger on a moving deck catches it where it is.
+    const caught = tweens.length;
+    tweens = tweens.filter(t => !(t.col === col && (deck === 'upper' ? t.slot === 0 : t.slot > 0)));
+    if (caught && !tweens.length && !wipe) settling = false;
     pointers.set(e.pointerId, { col, deck, index, offset: y - b.y, start: y, moved: false, y: b.y, time: performance.now(), el, contacts: new Set() });
     b.held = true; b.v = 0; el.setPointerCapture(e.pointerId);
   });
@@ -272,10 +407,10 @@ svg.addEventListener('pointermove', e => {
   b.v = Math.max(-380, Math.min(380, (b.y - p.y) / Math.max(.008, (now - p.time) / 1000)));
   beads.forEach((other, i) => { if (i !== p.index && Math.abs(other.y - before[i]) > .1) {
     other.v = b.v * .45;
-    if (!p.contacts.has(i)) { clickSound(Math.abs(b.v)); p.contacts.add(i); }
+    if (!p.contacts.has(i)) { clickSound(Math.abs(b.v), 'bead'); p.contacts.add(i); }
   } });
   const atStop = b.y <= bounds.min + p.index * SIZE + .1 || b.y >= bounds.max - (beads.length - 1 - p.index) * SIZE - .1;
-  if (atStop && !p.contacts.has(-1)) { clickSound(Math.abs(b.v)); p.contacts.add(-1); }
+  if (atStop && !p.contacts.has(-1)) { clickSound(Math.abs(b.v), 'bar'); p.contacts.add(-1); }
   if (!atStop) p.contacts.delete(-1);
   p.y = b.y; p.time = now;
 });
@@ -283,14 +418,11 @@ function endPointer(e: PointerEvent) {
   const p = pointers.get(e.pointerId); if (!p) return;
   pointers.delete(e.pointerId);
   const b = board[p.col][p.deck][p.index]; b.held = false;
-  if (e.type !== 'pointerup') b.v = 0;
-  else if (!p.moved) toggle(p.col, p.deck, p.index);
+  if (e.type === 'pointerup' && !p.moved) toggle(p.col, p.deck, p.index);
   else {
-    if (performance.now() - p.time > 80) b.v = 0;
-    const bounds = p.deck === 'upper' ? UPPER : LOWER;
-    const target = p.deck === 'upper' ? UPPER.max : LOWER.min + p.index * SIZE;
-    // Contact assistance only within a few pixels of the counting position.
-    if (Math.abs(b.y - target) < 9) { moveBead(board[p.col][p.deck], p.index, target, bounds.min, bounds.max); b.v = 0; }
+    // A finger that paused before lifting threw nothing; a cancelled one either.
+    const thrown = e.type === 'pointerup' && performance.now() - p.time <= 80 ? b.v : 0;
+    settle(p.col, p.deck, p.index, thrown);
   }
   save();
 }
@@ -315,9 +447,14 @@ const beadAt = (col: number, slot: number) => slot === 0 ? board[col].upper[0] :
 const coordsX = (e: PointerEvent) => { const rect = svg.getBoundingClientRect(); return (e.clientX - rect.left) * 600 / rect.width; };
 const columnAtX = (x: number) => Math.max(0, Math.min(COLUMNS - 1, Math.floor((x - 20) / (560 / COLUMNS))));
 const easeOut = (t: number) => 1 - (1 - t) ** 3;
+// A flicked bead is still moving when it meets what stops it, which is where the
+// click comes from; it arrives at about a third of its starting speed.
+const flick = (t: number) => .7 * t * (2 - t) + .3 * t;
+// A released bead was already moving at the finger's speed, so it slows into place.
+const glideOut = (t: number) => 1 - (1 - t) ** 2;
 
 const WIPE_DUR = 180, REVERT_DUR = 140, BEAD_STAGGER = 12, COLUMN_STAGGER = 45, ARM_DISTANCE = 8, AT_REST = .5;
-type Tween = { col: number; slot: number; from: number; to: number; start: number; dur: number };
+type Tween = { col: number; slot: number; from: number; to: number; start: number; dur: number; ease: (t: number) => number; hit: number; kind: Contact };
 type Wipe = { id: number; from: number[][]; reached: Set<number>; last: number; startX: number; startY: number; armed: boolean };
 let tweens: Tween[] = [];
 let wipe: Wipe | null = null;
@@ -325,14 +462,16 @@ let wipe: Wipe | null = null;
 // Slots are 0 for the upper bead and 1..4 for the lower ones, the same order
 // `positions` and `REST` use. The lower beads leave the bar outwards and each
 // travels the same distance, so a staggered column never overlaps in flight.
-function pushTween(col: number, slot: number, to: number, delay: number, dur: number) {
+function pushTween(col: number, slot: number, to: number, delay: number, dur: number, how: { ease?: (t: number) => number; hit?: number; kind?: Contact } = {}) {
   const bead = beadAt(col, slot);
   // Whatever is already queued for this bead goes first: this call is the newest
   // word on where it is going.
   tweens = tweens.filter(t => !(t.col === col && t.slot === slot));
   bead.v = 0;
   settling = true;
-  tweens.push({ col, slot, from: bead.y, to, start: performance.now() + delay + (slot ? slot * BEAD_STAGGER : 0), dur });
+  // Only a sweep staggers its beads; a glide moves a deck as one piece.
+  const stagger = how.ease ? 0 : slot * BEAD_STAGGER;
+  tweens.push({ col, slot, from: bead.y, to, start: performance.now() + delay + stagger, dur, ease: how.ease ?? easeOut, hit: how.hit ?? 140, kind: how.kind ?? 'bar' });
 }
 
 // Sweeping sends a rod's beads to rest. A bead already there has nothing to do,
@@ -393,13 +532,15 @@ function advanceTweens(now: number) {
   for (const t of tweens) {
     const bead = beadAt(t.col, t.slot);
     bead.v = 0;
-    bead.y = now <= t.start ? t.from : t.from + (t.to - t.from) * easeOut(Math.min(1, (now - t.start) / t.dur));
+    bead.y = now <= t.start ? t.from : t.from + (t.to - t.from) * t.ease(Math.min(1, (now - t.start) / t.dur));
   }
   const done = tweens.filter(t => now > t.start + t.dur);
   if (!done.length) return;
   tweens = tweens.filter(t => now <= t.start + t.dur);
-  // One tick per column that actually moved, once its last bead lands.
-  for (const col of new Set(done.map(t => t.col))) if (!tweens.some(t => t.col === col)) clickSound(140);
+  // One sound per deck that actually moved, once its last bead lands.
+  const deckOf = (t: Tween) => `${t.col}:${t.slot ? 'lower' : 'upper'}`;
+  const landed = new Map(done.map(t => [deckOf(t), t]));
+  for (const [key, t] of landed) if (t.hit > 0 && !tweens.some(other => deckOf(other) === key)) clickSound(t.hit, t.kind);
   if (!tweens.length && settling) { settling = false; save(); }
 }
 
@@ -428,8 +569,22 @@ decimalGesture.addEventListener('pointermove', e => {
 decimalGesture.addEventListener('pointerup', e => { if (wipe?.id === e.pointerId) endWipe(true); });
 decimalGesture.addEventListener('pointercancel', e => { if (wipe?.id === e.pointerId) endWipe(false, false); });
 
-function reset(shaken = false) { lockDecimal(); cancelPointers(); clearWipe(); board = createBoard(); render(); save(); clickSound(); status(shaken ? 'Three shakes. Board cleared.' : 'Board cleared.'); }
-const boardIsClear = () => board.every(c => digit(c) === 0);
+// Clearing runs the same wave as a sweep of the bar, left to right, so the
+// beads are seen going home rather than vanishing; the readout follows them.
+function reset(shaken = false) {
+  lockDecimal(); cancelPointers(); clearWipe();
+  for (let col = 0; col < COLUMNS; col++) tweenColumn(col, col * 30, WIPE_DUR);
+  if (!tweens.length) save();
+  status(shaken ? 'Three shakes. Board cleared.' : 'Board cleared.');
+}
+// Jumps every bead to where it was headed. For the moments nobody is watching
+// — the page being hidden or closed — when a save cannot wait for the motion.
+function finishTweens() {
+  if (!tweens.length) return;
+  for (const t of tweens) { const bead = beadAt(t.col, t.slot); bead.y = t.to; bead.v = 0; }
+  tweens = []; settling = false; needsRender = true;
+}
+const boardIsClear = () => board.every((_, col) => headedDigit(col) === 0);
 $('reset').onclick = () => reset();
 // True when nothing owns the bead positions: no tween is running, no finger is
 // down, the last tween has settled, and no bead carries velocity. Integrating
@@ -447,7 +602,7 @@ function frame(now: number) {
     while (accumulator >= 1 / 120) {
       for (const c of board) {
         const impact = Math.max(step(c.upper, UPPER.min, UPPER.max, 1 / 120), step(c.lower, LOWER.min, LOWER.max, 1 / 120));
-        if (impact > 70 && !pointers.size) clickSound(impact);
+        if (impact > 70 && !pointers.size) clickSound(impact, 'bead');
       }
       accumulator -= 1 / 120;
     }
@@ -463,8 +618,8 @@ function frame(now: number) {
   if (dirty && !pointers.size && !wipe && !settling) save();
   requestAnimationFrame(frame);
 }
-document.addEventListener('visibilitychange', () => { if (document.hidden) { endWipe(false, false); cancelPointers(); save(); } });
-window.addEventListener('pagehide', save);
+document.addEventListener('visibilitychange', () => { if (document.hidden) { endWipe(false, false); cancelPointers(); finishTweens(); save(); } });
+window.addEventListener('pagehide', () => { finishTweens(); save(); });
 window.addEventListener('blur', () => { cancelPointers(); endWipe(false, false); });
 
 let motionEnabled = false, motionReceived = false, emptyReadings = 0, motionTimer: ReturnType<typeof setTimeout> | undefined;

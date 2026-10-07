@@ -102,6 +102,25 @@ try {
   await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
   await pause(300);
   assert.notEqual(await shown(), wiped, 'a tap on a bead still counts it after a wipe');
+  // Letting go never leaves a bead floating: the deck settles into the nearer
+  // arrangement, and a quick flick carries the bead in the direction thrown.
+  const rodDigit = col => evaluate(`document.querySelectorAll("#digits span")[${col}].textContent[0]`);
+  const lowest = col => evaluate(`(()=>{const t=document.querySelector('.bead[data-col="${col}"][data-deck="lower"][data-index="3"]').getAttribute("transform");return Number(t.slice(t.indexOf(" ")+1,-1))})()`);
+  const drag = async (col, from, to, steps, gap, hold) => {
+    await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [point(col, from, 20)] });
+    for (let i = 1; i <= steps; i++) { await send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [point(col, from + (to - from) * i / steps, 20)] }); await pause(gap); }
+    await pause(hold);
+    await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await pause(400);
+  };
+  await drag(5, 354, 304, 8, 16, 150);
+  assert.equal(await rodDigit(5), '4', 'a slow drag past halfway settles every bead against the bar');
+  assert.ok(Math.abs(await lowest(5) - 276) < .01, 'and seats the stack exactly');
+  await drag(5, 276, 302, 8, 16, 150);
+  assert.equal(await rodDigit(5), '4', 'a slow drag short of halfway springs back to the bar');
+  await drag(5, 276, 300, 3, 8, 0);
+  assert.equal(await rodDigit(5), '3', 'a quick flick away from the bar sends the bead home');
+  assert.ok(Math.abs(await lowest(5) - 354) < .01, 'and seats it against the frame');
   await send('Browser.grantPermissions', { origin: await evaluate('location.origin'), permissions: ['sensors'] });
   await evaluate('document.querySelector("#settings").click(); document.querySelector("#motion").click()');
   await pause(100);
@@ -110,6 +129,8 @@ try {
     await pause(220);
     await evaluate('window.dispatchEvent(new DeviceMotionEvent("devicemotion",{acceleration:{x:22,y:0,z:0}}))');
   }
+  // Clearing is a wave across the rods, so the readout settles once it lands.
+  await pause(500);
   assert.equal(await evaluate('document.querySelector("#value").textContent'), '0.0', 'three shakes clear board');
   assert.equal(await evaluate('document.querySelector("#motion").getAttribute("aria-pressed")'), 'true', 'motion on only after readings');
   // Refuse sensors through both doors. Chrome now implements requestPermission
