@@ -1,6 +1,6 @@
 import './style.css';
 import { COLUMNS, SIZE, UPPER, LOWER, createBoard, digit, formatValue, placeName, moveBead, step, ShakeDetector } from './model';
-import { CAPACITY, MOVE_STEP_COUNT, MUL_STEP_COUNT, DIV_STEP_COUNT, TEST_ONES, describe as describeProblem, generate, generateSet, moveStepLabel, mulStepLabel, divStepLabel, problemLines, type Levels, type Operation, type Problem } from './problems';
+import { CAPACITY, answerOf, MOVE_STEP_COUNT, MUL_STEP_COUNT, DIV_STEP_COUNT, TEST_ONES, describe as describeProblem, generate, generateSet, moveStepLabel, mulStepLabel, divStepLabel, problemLines, type Levels, type Operation, type Problem } from './problems';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const svg = document.getElementById('board') as unknown as SVGSVGElement;
@@ -167,8 +167,23 @@ function decimalHint(message: string) {
   decimalTrack.style.setProperty('--caret-left', `${11.111 + ones * 77.778 / (COLUMNS - 1)}%`);
   hintTimer = setTimeout(() => { delete decimalTrack.dataset.hint; }, 2200);
 }
-function lockDecimal() { decimalUnlocked = false; decimal.classList.remove('unlocked'); $('decimal-lock').textContent = '🔒'; $('decimal-lock').setAttribute('aria-label', 'Unlock decimal slider'); $('decimal-lock').setAttribute('aria-pressed', 'false'); clearTimeout(hintTimer); delete decimalTrack.dataset.hint; }
-function toggleDecimalLock() { if (decimalFrozen) return; decimalUnlocked = !decimalUnlocked; decimal.classList.toggle('unlocked', decimalUnlocked); $('decimal-lock').textContent = decimalUnlocked ? '🔓' : '🔒'; $('decimal-lock').setAttribute('aria-label', decimalUnlocked ? 'Lock decimal slider' : 'Unlock decimal slider'); $('decimal-lock').setAttribute('aria-pressed', String(decimalUnlocked)); if (decimalUnlocked) { decimalHint('Drag the caret'); status('Decimal unlocked. Drag, then tap the lock to secure it.'); } else { status('Decimal position locked.'); } }
+// The lock icon is drawn rather than an emoji, so it matches the rest of the
+// controls on every platform; its open shackle is styled from aria-pressed.
+function showLock(unlocked: boolean) {
+  decimalUnlocked = unlocked;
+  decimal.classList.toggle('unlocked', unlocked);
+  $('decimal-lock').setAttribute('aria-label', unlocked ? 'Lock decimal slider' : 'Unlock decimal slider');
+  $('decimal-lock').setAttribute('aria-pressed', String(unlocked));
+}
+function lockDecimal() { showLock(false); clearTimeout(hintTimer); delete decimalTrack.dataset.hint; }
+function toggleDecimalLock() {
+  if (decimalFrozen) return;
+  if (decimalUnlocked) { lockDecimal(); status('Decimal position locked.'); return; }
+  showLock(true);
+  decimalHint('Drag the caret');
+  // Letting go of the caret locks it again, so there is nothing to tap afterwards.
+  status('Decimal unlocked. Drag the gold caret along the bar; it locks again when you let go.');
+}
 ($('decimal-lock') as HTMLButtonElement).onclick = toggleDecimalLock;
 decimalGesture.addEventListener('pointerdown', e => {
   e.preventDefault();
@@ -414,6 +429,7 @@ decimalGesture.addEventListener('pointerup', e => { if (wipe?.id === e.pointerId
 decimalGesture.addEventListener('pointercancel', e => { if (wipe?.id === e.pointerId) endWipe(false, false); });
 
 function reset(shaken = false) { lockDecimal(); cancelPointers(); clearWipe(); board = createBoard(); render(); save(); clickSound(); status(shaken ? 'Three shakes. Board cleared.' : 'Board cleared.'); }
+const boardIsClear = () => board.every(c => digit(c) === 0);
 $('reset').onclick = () => reset();
 // True when nothing owns the bead positions: no tween is running, no finger is
 // down, the last tween has settled, and no bead carries velocity. Integrating
@@ -619,7 +635,7 @@ function renderProblem() {
     addAction('Next problem', true, nextProblem);
   } else if (test.verdict === 'wrong') {
     problemHeading.textContent = 'Not quite';
-    note(`Your board shows ${boardValue()}.`);
+    note(boardIsClear() ? 'Your board shows 0. Build the answer on the beads, then submit.' : `Your board shows ${boardValue()}.`);
     addAction('Clear board', false, () => { problemDialog.close(); reset(); status('Board cleared. Same problem. Submit when it is right.'); });
     addAction('Keep board', false, () => { problemDialog.close(); status('Board kept. Adjust it and submit again.'); });
     addAction('Reveal answer', false, revealAnswer);
@@ -643,18 +659,21 @@ function newProblem() {
 }
 
 function showProblem() {
-  if (!test.problem) test.problem = generate(test.ops, test.levels);
-  // Re-reading after a wrong answer keeps the Clear / Keep / Reveal choices,
-  // so a second look cannot take the ways out away.
-  if (test.verdict !== 'wrong') test.verdict = 'none';
+  if (!test.problem) { test.problem = generate(test.ops, test.levels); test.verdict = 'none'; }
+  // Re-reading keeps whatever verdict is standing: after a wrong answer the
+  // Clear / Keep / Reveal choices, after a right or revealed one the way on to
+  // the next problem, so a second look never takes the way out away.
   renderProblem();
   if (!problemDialog.open) problemDialog.showModal();
   status(`Problem: ${describeProblem(test.problem)}`);
 }
 
+// A new problem starts from an empty board, as it does on a soroban you are
+// holding: the last answer would otherwise be the first thing to clear by hand,
+// and a subtraction cannot even be set up on top of it.
 function nextProblem() {
+  if (!boardIsClear()) reset();
   newProblem();
-  renderProblem();
   status(`Problem: ${describeProblem(test.problem!)}`);
 }
 
@@ -672,7 +691,7 @@ function submitAnswer() {
   clickSound();
   renderProblem();
   if (!problemDialog.open) problemDialog.showModal();
-  status(right ? 'Correct.' : `Not yet. Your board shows ${shown}.`);
+  status(right ? 'Correct.' : `Not yet. Your board shows ${boardValue()}.`);
   save();
 }
 
@@ -727,6 +746,7 @@ function isProblem(value: unknown): value is Problem {
   return !!problem && ['add', 'sub', 'mul', 'div'].includes(problem.op) && Array.isArray(problem.operands)
     && problem.operands.length > 1 && problem.operands.every((n) => Number.isInteger(n) && n > 0 && n <= CAPACITY)
     && Number.isInteger(problem.answer) && problem.answer >= 0 && problem.answer <= CAPACITY
+    && problem.answer === answerOf(problem.op, problem.operands)
     && (problem.op !== 'div' || (problem.operands.length === 2 && problem.operands[1] >= 2 && problem.operands[0] % problem.operands[1] === 0 && problem.operands[0] / problem.operands[1] === problem.answer));
 }
 
@@ -790,11 +810,21 @@ divLevel.onchange = () => {
   test.levels.div = Number(divLevel.value);
   levelChanged(test.problem?.op === 'div');
 };
+// The note under the operations normally says what they are for; it says why
+// a tap did nothing when the last operation cannot be switched off.
+const OPS_NOTE = $('ops-note').textContent!;
+let opsNoteTimer: ReturnType<typeof setTimeout> | undefined;
+function opsNote(message: string) {
+  clearTimeout(opsNoteTimer);
+  $('ops-note').textContent = message;
+  status(message);
+  opsNoteTimer = setTimeout(() => { $('ops-note').textContent = OPS_NOTE; }, 2500);
+}
 ($('test-mode') as HTMLButtonElement).onclick = () => setTestMode(!test.on);
 for (const [id, op] of [['op-add', 'add'], ['op-sub', 'sub'], ['op-mul', 'mul'], ['op-div', 'div']] as Array<[string, Operation]>) {
   ($(id) as HTMLButtonElement).onclick = () => {
     const off = test.ops.includes(op);
-    if (off && test.ops.length === 1) { status('Test mode needs at least one operation.'); return; }
+    if (off && test.ops.length === 1) { opsNote('Keep at least one operation selected.'); return; }
     test.ops = off ? test.ops.filter((each) => each !== op) : [...test.ops, op];
     if (test.on) newProblem();
     else if (test.problem && !test.ops.includes(test.problem.op)) {
@@ -838,8 +868,8 @@ type TutorialLesson = {
 const tutorialLessons: Record<Operation, TutorialLesson[]> = {
   add: [
     {
-      title: 'Add by counting on', start: 4, equation: ['4', '+', '3', '=', '7'],
-      story: 'The abacus holds the running total. Adding means changing the beads so the tally grows by the amount you add.',
+      title: 'Add with the five bead', start: 4, equation: ['4', '+', '3', '=', '7'],
+      story: 'The abacus holds the running total. Adding means changing the beads so the tally grows by the amount you add. Here the ones rod already shows 4, so three more one-beads will not fit.',
       boardRole: 'The beads show the running total.',
       steps: [{ value: 7, action: 'Add 3. Move the 5-bead toward the bar, then move 2 one-beads away.', why: 'That changes the rod by +5 − 2, which is the same as +3. The 5-bead helps when there are not enough loose one-beads.' }],
     },
@@ -1007,9 +1037,6 @@ function countThroughStep(index: number, steps: TutorialStep[]) {
   for (let i = index; i >= 0; i--) if (steps[i].count !== undefined) return steps[i].count!;
   return 0;
 }
-function tutorialFinishable() {
-  return operationOrder.every((op) => tutorialLessons[op].every((_, index) => tutorialDone.has(`${op}:${index}`) || (op === tutorialOp && index === tutorialIndex)));
-}
 function nextTutorialLesson(): { op: Operation; index: number } | undefined {
   const lessons = operationOrder.flatMap((op) => tutorialLessons[op].map((_, index) => ({ op, index })));
   const current = lessons.findIndex(({ op, index }) => op === tutorialOp && index === tutorialIndex);
@@ -1067,9 +1094,8 @@ function renderLessonRack() {
   const action = tutorialContent.querySelector<HTMLElement>('.lesson-step-action');
   const why = tutorialContent.querySelector<HTMLElement>('.lesson-step-why');
   const currentStep = tutorialStepIndex >= 0 ? lesson.steps[tutorialStepIndex] : undefined;
-  const previousValue = tutorialTryStep ? lesson.steps[tutorialTryStep - 1].value : lesson.start;
-  if (action) action.textContent = tutorialTryStarted ? `Your turn: ${challenge.action}` : currentStep?.action ?? `The board starts at ${lesson.start}. Press “Show first step” to see one change at a time.`;
-  if (why) why.textContent = tutorialTryStarted ? tutorialCheckMessage || (lesson.countGoal ? `${lesson.boardRole} Work out this chunk, then update the group counter separately from the remainder.` : `${lesson.boardRole} Work out the new partial total before checking.`) : currentStep?.why ?? lesson.boardRole;
+  if (action) action.textContent = tutorialTryStarted ? `Your turn: ${challenge.action}` : currentStep?.action ?? `The board starts at ${lesson.start}. Press Show first step to watch one move at a time, at your own pace.`;
+  if (why) why.textContent = tutorialTryStarted ? tutorialCheckMessage || (challenge.count !== undefined ? 'Change the beads for this chunk, then add the groups to the counter below.' : '') : currentStep?.why ?? '';
   const counter = tutorialContent.querySelector<HTMLElement>('.lesson-counter-value');
   if (counter) counter.textContent = `${tutorialCount} / ${lesson.countGoal ?? 0}`;
   const countControls = tutorialContent.querySelector<HTMLElement>('.lesson-count-controls');
@@ -1081,8 +1107,9 @@ function renderLessonRack() {
   }
   const prompt = tutorialContent.querySelector<HTMLElement>('.lesson-prompt');
   if (prompt) prompt.textContent = tutorialTryStarted
-    ? correct ? tutorialTryStep + 1 < lesson.steps.length ? 'This partial result is right. Press Next step to continue.' : `Exactly. ${lesson.countGoal ? `The remainder is zero and ${tutorialCount} groups were counted.` : 'The board now shows the answer.'}` : tutorialCheckMessage ? 'Adjust the board or group counter, then check again.' : 'Work out this step first, then press Check step. The explanation will help if you get stuck.'
-    : 'Read the explanation before moving on. Each press of Show reveals one deliberate step; it will wait while you read.';
+    ? correct ? tutorialTryStep + 1 < lesson.steps.length ? 'This partial result is right. Press Next step to continue.' : `Exactly. ${lesson.countGoal ? `The remainder is zero and ${tutorialCount} groups were counted.` : 'The board now shows the answer.'}` : tutorialCheckMessage ? 'Adjust the beads and try Check step again.' : 'Tap beads to move them, then press Check step.'
+    : '';
+  if (prompt) prompt.hidden = !prompt.textContent;
   const progress = tutorialContent.querySelector<HTMLElement>('.lesson-progress');
   if (progress) progress.textContent = `${tutorialIndex + 1} / ${tutorialLessons[tutorialOp].length}`;
   const equation = tutorialContent.querySelector<HTMLElement>('.lesson-equation');
@@ -1132,7 +1159,7 @@ function renderTutorial() {
   tutorialTryStep = 0;
   tutorialCount = 0;
   tutorialCheckMessage = '';
-  tutorialContent.innerHTML = `<div class="lesson-meta"><span class="lesson-progress"></span><span class="lesson-feedback" aria-live="polite"></span></div><h3 class="lesson-title">${lesson.title}</h3><div class="lesson-equation" aria-label="${lesson.equation.join(' ')}"></div><p class="lesson-story">${lesson.story}</p><p class="lesson-board-role"><strong>What the board tracks:</strong> ${lesson.boardRole}</p><div class="lesson-step-card"><p class="lesson-step-counter"></p><p class="lesson-step-action"></p><p class="lesson-step-why"></p></div>${lesson.countGoal ? `<div class="lesson-counter"><span>${lesson.countLabel}: <strong class="lesson-counter-value">0 / ${lesson.countGoal}</strong></span><div class="lesson-count-controls" hidden></div></div>` : ''}<p class="lesson-prompt"></p><div class="lesson-legend" aria-label="Abacus bead values"><span><i class="legend-five"></i>5</span><span><i class="legend-one"></i>1</span></div><div class="lesson-rack"></div><div class="lesson-controls"><button type="button" class="lesson-reset" aria-label="Reset lesson">↺</button><button type="button" class="lesson-show">Show first step</button><button type="button" class="primary lesson-next">Try it yourself</button></div>`;
+  tutorialContent.innerHTML = `<div class="lesson-meta"><span class="lesson-progress"></span><span class="lesson-feedback" aria-live="polite"></span></div><h3 class="lesson-title">${lesson.title}</h3><div class="lesson-equation" aria-label="${lesson.equation.join(' ')}"></div><p class="lesson-story">${lesson.story}</p><p class="lesson-board-role"><strong>What the board tracks:</strong> ${lesson.boardRole}</p><div class="lesson-step-card"><p class="lesson-step-counter"></p><p class="lesson-step-action"></p><p class="lesson-step-why"></p></div>${lesson.countGoal ? `<div class="lesson-counter"><span>${lesson.countLabel}: <strong class="lesson-counter-value">0 / ${lesson.countGoal}</strong></span><div class="lesson-count-controls" hidden></div></div>` : ''}<p class="lesson-prompt"></p><p class="lesson-legend">Above the bar: <strong>5</strong> · below: <strong>1</strong> each · <span class="legend-counted"><i></i>counted</span></p><div class="lesson-rack"></div><div class="lesson-controls"><button type="button" class="lesson-reset" aria-label="Reset lesson">↺</button><button type="button" class="lesson-show">Show first step</button><button type="button" class="primary lesson-next">Try it yourself</button></div>`;
   tutorialDigits = String(lesson.start).padStart(3, '0').split('').map(Number);
   renderLessonRack();
   tutorialContent.querySelector<HTMLButtonElement>('.lesson-reset')!.onclick = () => {
@@ -1142,9 +1169,6 @@ function renderTutorial() {
     tutorialCount = 0;
     tutorialCheckMessage = '';
     tutorialDigits = String(lesson.start).padStart(3, '0').split('').map(Number);
-    tutorialDone.delete(tutorialKey());
-    saveTutorial();
-    refreshTutorialProgress();
     renderLessonRack();
   };
   tutorialContent.querySelector<HTMLButtonElement>('.lesson-show')!.onclick = showTutorialDemo;
@@ -1180,7 +1204,7 @@ function advanceTutorial() {
   const challenge = lesson.steps[tutorialTryStep];
   const countCanProgress = !lesson.countGoal || challenge.count === undefined || tutorialCount === challenge.count;
   const correct = tutorialValue() === challenge.value && countCanProgress;
-  if (!correct && !tutorialDone.has(tutorialKey())) {
+  if (!correct) {
     tutorialCheckMessage = lesson.countGoal && tutorialCount !== (challenge.count ?? 0)
       ? `The remainder is ${tutorialValue()}; the group count is ${tutorialCount}. This step needs ${challenge.count} groups counted.`
       : `The board shows ${tutorialValue()}, but this step should leave ${challenge.value}. Recheck the place-value chunk and bead values.`;
@@ -1217,7 +1241,6 @@ tutorialContent.addEventListener('click', (event) => {
   const element = event.target as HTMLElement;
   const countButton = element.closest<HTMLButtonElement>('.lesson-count-move');
   if (countButton && tutorialTryStarted) {
-    const challenge = tutorialLessons[tutorialOp][tutorialIndex].steps[tutorialTryStep];
     tutorialCount += Number(countButton.dataset.count);
     tutorialCheckMessage = '';
     renderLessonRack();
@@ -1234,8 +1257,6 @@ tutorialContent.addEventListener('click', (event) => {
     tutorialDigits[rod] = Math.floor(value / 5) * 5 + (index < low ? index : index + 1);
   }
   tutorialCheckMessage = '';
-  saveTutorial();
-  refreshTutorialProgress();
   renderLessonRack();
   tutorialContent.querySelector<HTMLButtonElement>(`.lesson-bead[data-rod="${rod}"][data-deck="${target.dataset.deck}"][data-index="${index}"]`)?.focus({ preventScroll: true });
 });
@@ -1271,7 +1292,8 @@ const rungNames = () => {
   if (test.ops.some((op) => op === 'add' || op === 'sub')) names.push(moveStepLabel(test.levels.move));
   if (test.ops.includes('mul')) names.push(mulStepLabel(test.levels.mul));
   if (test.ops.includes('div')) names.push(divStepLabel(test.levels.div));
-  return names.join(' · ');
+  // "3 · small friends, one digit" reads as a menu entry; in a sentence it is a level.
+  return names.map((name) => name.replace(/^(\d+) · /, 'level $1, ')).join(' and ');
 };
 
 function newSheet() {
@@ -1295,7 +1317,7 @@ function renderSheet() {
   sheetLines.innerHTML = '';
   sheetActions.innerHTML = '';
   const count = sheet.problems.length;
-  sheetNote.textContent = count ? `${count} problems at ${rungNames()}. Tap one to check it.` : '';
+  sheetNote.textContent = count ? `${count} problems · ${rungNames()}. Tap a problem to check your answer; tap again to hide it.` : '';
   sheet.problems.forEach((problem, row) => {
     const item = document.createElement('li');
     item.className = 'sheet-item';
@@ -1352,7 +1374,7 @@ function restoreSheet(raw: unknown) {
 
 ($('worksheet') as HTMLButtonElement).onclick = openSheet;
 ($('close-sheet') as HTMLButtonElement).onclick = () => sheetDialog.close();
-for (const dialog of [settings, welcome, sheetDialog, tutorial]) dialog.addEventListener('click', e => { if (e.target === dialog) { const r = dialog.getBoundingClientRect(); if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) dialog.close(); } });
+for (const dialog of [settings, welcome, sheetDialog, tutorial, problemDialog]) dialog.addEventListener('click', e => { if (e.target === dialog) { const r = dialog.getBoundingClientRect(); if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) dialog.close(); } });
 try { if (!localStorage.getItem('soroban-welcomed')) welcome.showModal(); } catch { welcome.showModal(); }
 labels(); render(); requestAnimationFrame(frame);
 if ('serviceWorker' in navigator && import.meta.url.includes('/assets/')) navigator.serviceWorker.register('/sw.js').catch(() => {});

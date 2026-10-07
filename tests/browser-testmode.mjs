@@ -23,7 +23,7 @@ const send = (method, params = {}) => new Promise((resolve, reject) => { pending
 const evaluate = async (expression) => { const r = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }); if (r.exceptionDetails) throw new Error(JSON.stringify(r.exceptionDetails)); return r.result.value; };
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const text = (selector) => evaluate(`document.querySelector(${JSON.stringify(selector)}).textContent`);
-const shown = (selector) => evaluate(`!document.querySelector(${JSON.stringify(selector)}).hidden`);
+const shown = (selector) => evaluate(`(e=>!e.hidden&&getComputedStyle(e).display!=="none")(document.querySelector(${JSON.stringify(selector)}))`);
 const click = (selector) => evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);
 const action = (label) => evaluate(`[...document.querySelectorAll("#problem-actions button")].find(b=>b.textContent===${JSON.stringify(label)}).click()`);
 const lines = () => evaluate('[...document.querySelectorAll("#problem-lines .line")].map(d=>d.textContent)');
@@ -130,6 +130,12 @@ try {
   await click('.lesson-next');
   assert.equal(await text('.lesson-title'), 'Make a ten', 'a correct step advances to the next lesson');
   assert.deepEqual(await evaluate('JSON.parse(localStorage.getItem("soroban-tutorial-v2")).done'), ['add:0'], 'completed lesson progress is saved');
+  await click('.tutorial-lesson-nav .lesson-number:first-child');
+  await click('.lesson-next');
+  await click('.lesson-next');
+  assert.equal(await text('.lesson-title'), 'Add with the five bead', 'a finished lesson still checks the board instead of skipping ahead');
+  assert.match(await text('.lesson-step-why'), /board shows 4/, 'and says what is wrong');
+  await click('.tutorial-lesson-nav .lesson-number:nth-child(2)');
   await click('.tutorial-operation:last-child');
   await click('.tutorial-lesson-nav .lesson-number:last-child');
   assert.equal(await text('.lesson-title'), 'Divide 900 ÷ 36', 'the longer-division worked example is selectable');
@@ -156,7 +162,8 @@ try {
   await click('.lesson-next');
   assert.equal(await evaluate('document.querySelector(".lesson-step-counter").textContent'), 'Your turn · step 3 of 3', 'the counted 20 groups advance division to its final chunk');
   assert.match(await text('.lesson-step-action'), /36 × 5 = 180/, 'the final chunk subtracts five more groups');
-  assert.match(await text('.lesson-step-why'), /Beads show the remainder/, 'the division lesson explains what the beads and quotient track');
+  assert.match(await text('.lesson-board-role'), /Beads show the remainder/, 'the division lesson explains what the beads track');
+  assert.match(await text('.lesson-step-why'), /counter/, 'and that the quotient is counted separately');
   assert.equal(await evaluate('document.querySelector(".lesson-show").hidden'), true, 'the worked-answer control is unavailable during try-it');
   await click('#close-tutorial');
   assert.equal(await text('#value'), valueBeforeTutorial, 'tutorial practice does not alter the real board');
@@ -197,7 +204,7 @@ try {
   // An empty board is wrong, and a wrong answer offers all three ways out.
   await click('#submit');
   assert.equal(await text('#problem-heading'), 'Not quite', 'an empty board is not the answer');
-  assert.equal(await text('#problem-note'), 'Your board shows 0.', 'the verdict quotes the board');
+  assert.match(await text('#problem-note'), /^Your board shows 0\./, 'the verdict quotes the board');
   assert.deepEqual(await evaluate('[...document.querySelectorAll("#problem-actions button")].map(b=>b.textContent)'), ['Clear board', 'Keep board', 'Reveal answer'], 'a wrong answer offers all three ways out');
 
   // Reveal restates the problem and its answer, and the arithmetic has to agree.
@@ -242,6 +249,12 @@ try {
   assert.deepEqual(await lines(), [`${next[0]}`, `× ${next[1]}`], 'the verdict leaves the column itself alone');
   assert.equal(await text('#problem-lines .total'), `= ${answer}`, 'and writes the total once, under the rule');
   assert.equal(await shown('#problem-note'), false, 'no empty line is left where the prose was');
+  assert.equal(await evaluate('getComputedStyle([...document.querySelectorAll("#problem-actions button")].find(b=>b.textContent==="Next problem")).backgroundColor'), 'rgb(28, 89, 72)', 'the way on is drawn as the primary action');
+  await click('#close-problem');
+  await click('#problem');
+  assert.equal(await text('#problem-heading'), 'Correct', 'a second look keeps the verdict');
+  assert.ok(await evaluate('[...document.querySelectorAll("#problem-actions button")].some(b=>b.textContent==="Next problem")'), 'and keeps the way on to the next problem');
+  await click('#close-problem');
 
   // The problem and the board both outlive a reload.
   await send('Page.reload');
@@ -277,6 +290,22 @@ try {
   assert.equal(await evaluate('document.querySelector("#problem-step").hidden'), true, 'and the count goes with it');
   await click('#close-problem');
 
+  // A new problem starts on an empty board, as it would on a real soroban.
+  await click('#submit');
+  await action('Reveal answer');
+  await action('Next problem');
+  assert.equal(await text('#value'), '0', 'Next problem clears the board');
+  assert.equal(await text('#problem-heading'), 'Problem', 'and asks a fresh question');
+  await click('#close-problem');
+  // Put the earlier answer back, which the decimal checks below read.
+  for (let k = 0; k < 6; k++) {
+    const digit = Math.floor(answer / 10 ** k) % 10;
+    if (!digit) continue;
+    if (digit >= 5) await tap(5 - k, 28, tapId++);
+    if (digit % 5) await tap(5 - k, 246 + (digit % 5 - 1) * 36, tapId++);
+  }
+  assert.equal(await text('#value'), `${answer}`, 'the board is usable again after the clear');
+
   // Leaving test mode gives the readout and the decimal back.
   await click('#settings');
   assert.equal(await text('#test-mode'), 'On', 'settings reports test mode as on');
@@ -298,7 +327,7 @@ try {
   await click('#worksheet');
   assert.equal(await evaluate('document.querySelector("#worksheet-dialog").open'), true, 'a sheet opens from settings');
   assert.equal(await evaluate('document.querySelector("#settings-dialog").open'), false, 'and settings steps aside');
-  assert.match(await text('#sheet-note'), /^8 problems at 1 · direct, one digit/, 'the sheet names its rung and the short length that rung can fill');
+  assert.match(await text('#sheet-note'), /^8 problems · level 1, direct, one digit/, 'the sheet names its rung and the short length that rung can fill');
 
   const sheet = () => evaluate('[...document.querySelectorAll("#sheet-lines .sheet-item")].map(li=>({index:li.querySelector(".sheet-index").textContent,lines:[...li.querySelectorAll(".sheet-line")].map(s=>s.textContent),total:li.querySelector(".sheet-total")?.textContent??null}))');
   const answered = (lines) => lines.reduce((sum, line, i) => sum + (i ? Number(line.replace(/^[+−×÷]\s*/, '')) : Number(line)), 0);
