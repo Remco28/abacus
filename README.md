@@ -63,3 +63,13 @@ After DNS validates and GitHub issues a certificate, enable **Enforce HTTPS** in
 `npm test` covers the contact sounds staying unpitched and short, digits 0–9, contiguous counting, decimal precision, bead pushing, collision energy/constraints, shake timing/debounce, and the practice-mode generator: the complement classifier, every rung of both ladders, the board's capacity, sheet sizing and uniqueness, and subtraction that never passes through a negative total. `npm run test:browser` runs both browser suites. `browser.mjs` checks simultaneous touch, drag/keyboard decimal control, the reckoning-bar wipe (following the finger, springing back on a short swipe with every bead landing back where it started, clearing on a full traverse, and ignoring a tap), persistence, first-visit welcome dismissal, shake reset, sensor guidance (the steps an Android user agent gets, the empty-reading signature of a blocked permission, and the no-data timeout), and landscape layout. `browser-testmode.mjs` checks practice mode end to end: normalizing and holding the decimal, reading a problem in its dialog, clear/keep/reveal on a wrong answer, accepting and rejecting answers, keeping the verdict on a second look, clearing the board for the next problem, marking your place in a column, restoring the decimal on exit, and the problem, the board and the mark surviving a reload. Synthetic motion/pointer tests do not replace physical iPhone and Android validation.
 
 Traditional unit dots: [League of Japan Abacus Associations](https://www.shuzan.jp/english/preliminary/). Hosting: [GitHub custom-domain documentation](https://docs.github.com/en/pages/configuring-a-custom-domain-for-your-github-pages-site).
+
+## License
+
+Copyright Team Remco (https://teamremco.org).
+
+Free to use, and free to build on for your own use. You may use, copy and change this for personal, educational and other noncommercial purposes under the [PolyForm Noncommercial License 1.0.0](LICENSE.md).
+
+Commercial use needs permission. If you'd like to use this commercially, [open an issue](https://github.com/Remco28/abacus/issues) and we can talk.
+
+Third-party libraries keep their own licenses.
